@@ -1,0 +1,2708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#FE5000">
+<title>Judgement by AI</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#05060a;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 35%,#11131c 0%,#05060a 70%)}
+  canvas{display:block;border-radius:6px;box-shadow:0 0 0 1px #1d2130,0 18px 60px rgba(0,0,0,.85);background:#08090c}
+  #hiddenInput{position:fixed;left:-999px;top:-999px;opacity:0;width:1px;height:1px}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="240" height="282"></canvas></div>
+<input id="hiddenInput" autocomplete="off" autocapitalize="off" spellcheck="false">
+<script>
+"use strict";
+/* =========================================================================
+   JUDGEMENT BY AI  -  a Death by AI style party game for the Rabbit R1
+   Created by Jeff H. (Mr. Ghost) / GhostLegacyX
+   Single file. No external assets. 240x282 logical canvas.
+   ========================================================================= */
+
+const W = 240, H = 282;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d', { alpha: false });
+const MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Courier New", monospace';
+
+const C = {
+  bg:      '#08090c',
+  panel:   '#101219',
+  panel2:  '#161a24',
+  line:    '#262b3a',
+  ink:     '#ece9df',
+  dim:     '#8b93a7',
+  faint:   '#525a6d',
+  orange:  '#ff5a2b',
+  red:     '#ff2d55',
+  green:   '#5df2a0',
+  gold:    '#ffc857',
+  purple:  '#b48cff',
+  blue:    '#5bc8ff',
+  blood:   '#c81e3a'
+};
+
+let DPR = 1, viewScale = 1;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const scale = Math.max(0.4, Math.min(window.innerWidth / W, window.innerHeight / H));
+  DPR = dpr; viewScale = scale;
+  cv.width = Math.round(W * dpr);
+  cv.height = Math.round(H * dpr);
+  cv.style.width = Math.round(W * scale) + 'px';
+  cv.style.height = Math.round(H * scale) + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.textBaseline = 'top';
+  buildFX();
+}
+
+/* ---------------- tiny utils ---------------- */
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
+const easeInOut = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const pad2 = n => (n < 10 ? '0' : '') + n;
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+const pickR = (arr, rng) => arr[Math.floor(rng() * arr.length) % arr.length];
+
+function txt(s, x, y, size, color, align, weight) {
+  ctx.font = (weight || '400') + ' ' + size + 'px ' + MONO;
+  ctx.fillStyle = color || C.ink;
+  ctx.textAlign = align || 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(s, x, y);
+  ctx.textAlign = 'left';
+}
+function measure(s, size, weight) {
+  ctx.font = (weight || '400') + ' ' + size + 'px ' + MONO;
+  return ctx.measureText(s).width;
+}
+function wrap(s, maxW, size, weight) {
+  ctx.font = (weight || '400') + ' ' + size + 'px ' + MONO;
+  const words = String(s).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (let i = 0; i < words.length; i++) {
+    const test = line ? line + ' ' + words[i] : words[i];
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = words[i]; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+function para(s, x, y, maxW, size, color, lh, weight, maxLines) {
+  const lines = wrap(s, maxW, size, weight);
+  const n = maxLines ? Math.min(lines.length, maxLines) : lines.length;
+  for (let i = 0; i < n; i++) {
+    let ln = lines[i];
+    if (maxLines && i === maxLines - 1 && lines.length > maxLines) {
+      while (ln.length > 4 && measure(ln + '...', size, weight) > maxW) ln = ln.slice(0, -1);
+      ln += '...';
+    }
+    txt(ln, x, y + i * lh, size, color, 'left', weight);
+  }
+  return n * lh;
+}
+function rr(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function panel(x, y, w, h, fill, stroke, r) {
+  rr(x, y, w, h, r === undefined ? 3 : r);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+}
+function hline(x1, x2, y, color, alpha) {
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.fillStyle = color || C.line;
+  ctx.fillRect(x1, y, x2 - x1, 1);
+  ctx.globalAlpha = 1;
+}
+function vline(x, y1, y2, color, alpha) {
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.fillStyle = color || C.line;
+  ctx.fillRect(x, y1, 1, y2 - y1);
+  ctx.globalAlpha = 1;
+}
+function tag(s, x, y, bg, fg, size) {
+  size = size || 6;
+  ctx.font = '700 ' + size + 'px ' + MONO;
+  const w = ctx.measureText(s).width + 6;
+  panel(x, y, w, size + 5, bg, null, 2);
+  txt(s, x + 3, y + 2.5, size, fg, 'left', '700');
+  return w;
+}
+function fitText(s, maxW, size, weight, minSize) {
+  let sz = size;
+  minSize = minSize || 5;
+  while (sz > minSize && measure(s, sz, weight) > maxW) sz -= 0.5;
+  return sz;
+}
+
+/* ---------------- effects layer ---------------- */
+let scanPattern = null, vignette = null;
+function buildFX() {
+  const sc = document.createElement('canvas');
+  sc.width = 4; sc.height = 4;
+  const sx = sc.getContext('2d');
+  sx.fillStyle = 'rgba(0,0,0,0.20)';
+  sx.fillRect(0, 0, 4, 1);
+  scanPattern = ctx.createPattern(sc, 'repeat');
+  const vg = document.createElement('canvas');
+  vg.width = W; vg.height = H;
+  const vx = vg.getContext('2d');
+  const g = vx.createRadialGradient(W / 2, H * 0.42, 40, W / 2, H * 0.5, 200);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(0.62, 'rgba(0,0,0,0.10)');
+  g.addColorStop(1, 'rgba(0,0,0,0.46)');
+  vx.fillStyle = g; vx.fillRect(0, 0, W, H);
+  vignette = vg;
+}
+
+/* ---------------- audio ---------------- */
+let AC = null, masterGain = null;
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = AC.createGain();
+    masterGain.gain.value = G.settings.sound ? 0.9 : 0;
+    masterGain.connect(AC.destination);
+  } catch (e) { AC = null; }
+}
+function tone(freq, dur, vol, type, slideTo, when) {
+  if (!AC || !G.settings.sound) return;
+  const t0 = (when || AC.currentTime);
+  const o = AC.createOscillator();
+  const g = AC.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(freq, t0);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.001, vol || 0.07), t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(masterGain);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function noise(dur, vol) {
+  if (!AC || !G.settings.sound) return;
+  const len = Math.floor(AC.sampleRate * dur);
+  const buf = AC.createBuffer(1, len, AC.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = AC.createBufferSource(); src.buffer = buf;
+  const g = AC.createGain(); g.gain.value = vol || 0.08;
+  src.connect(g); g.connect(masterGain); src.start();
+}
+function sfx(type) {
+  if (!AC || !G.settings.sound) return;
+  if (type === 'move') tone(660, 0.045, 0.035, 'square');
+  else if (type === 'select') { tone(880, 0.06, 0.05, 'square'); tone(1320, 0.09, 0.04, 'square', null, AC.currentTime + 0.05); }
+  else if (type === 'back') tone(300, 0.09, 0.04, 'triangle');
+  else if (type === 'tick') tone(1200, 0.02, 0.02, 'square');
+  else if (type === 'warn') tone(220, 0.12, 0.06, 'sawtooth');
+  else if (type === 'voiceOn') { tone(520, 0.08, 0.05, 'sine'); tone(780, 0.1, 0.03, 'sine', null, AC.currentTime + 0.06); }
+  else if (type === 'voiceOff') tone(390, 0.1, 0.05, 'sine', 240);
+  else if (type === 'judge') { tone(140, 0.3, 0.05, 'sawtooth'); tone(210, 0.3, 0.03, 'sine', null, AC.currentTime + 0.08); }
+  else if (type === 'survive') { [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.35, 0.045, 'triangle', null, AC.currentTime + i * 0.07)); }
+  else if (type === 'death') { tone(180, 0.7, 0.09, 'sawtooth', 44); noise(0.25, 0.06); }
+  else if (type === 'round') { tone(330, 0.09, 0.05, 'square'); tone(440, 0.12, 0.05, 'square', null, AC.currentTime + 0.1); }
+  else if (type === 'win') { [392, 523, 659, 784, 1046, 1318].forEach((f, i) => tone(f, 0.5, 0.05, 'triangle', null, AC.currentTime + i * 0.09)); }
+  else if (type === 'achieve') { tone(1046, 0.1, 0.05, 'sine'); tone(1568, 0.22, 0.05, 'sine', null, AC.currentTime + 0.1); }
+}
+
+/* ---------------- persistence ---------------- */
+const SAVE_KEY = 'jba_save_v1';
+const DEFAULT_SAVE = {
+  settings: { sound: true, narrator: true, fx: true, difficulty: 1, bonus: true },
+  stats: { runs: 0, wins: 0, survives: 0, deaths: 0, best: 0, streak: 0, bestStreak: 0, banned: 0, cheese: 0, daily: 0, rounds: 0 },
+  ach: {},
+  daily: { date: '', best: 0, done: false },
+  history: [],
+  avatar: 0
+};
+let G = JSON.parse(JSON.stringify(DEFAULT_SAVE));
+function loadSave() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    G = Object.assign({}, DEFAULT_SAVE, d);
+    G.settings = Object.assign({}, DEFAULT_SAVE.settings, d.settings || {});
+    G.stats = Object.assign({}, DEFAULT_SAVE.stats, d.stats || {});
+    G.daily = Object.assign({}, DEFAULT_SAVE.daily, d.daily || {});
+    G.ach = d.ach || {};
+    G.history = Array.isArray(d.history) ? d.history.slice(0, 8) : [];
+  } catch (e) {}
+}
+function save() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) {}
+}
+
+/* =========================================================================
+   CONTENT - scenarios, packs, avatars, rivals
+   ========================================================================= */
+const SCEN = [
+  { t: "You wake up buried alive in a coffin six feet underground.", k: ["coffin", "dirt", "buried", "lid", "air", "dig", "wood"], tools: ["belt buckle", "coffin lid", "boot", "signet ring", "loose nail"] },
+  { t: "A swarm of bees has decided you are their new queen. They want a hug.", k: ["bees", "swarm", "queen", "hug", "smoke", "hive", "sting"], tools: ["bee smoker", "bedsheet", "perfume", "cardboard box", "hose"] },
+  { t: "The elevator you are in just snapped its cable on floor 40. You are falling.", k: ["elevator", "cable", "falling", "floor", "brake", "rail", "jump"], tools: ["emergency phone", "handrail", "coat", "briefcase", "ceiling hatch"] },
+  { t: "The floor of your kitchen has turned into lava. Your phone is on the counter.", k: ["lava", "floor", "kitchen", "counter", "phone", "chair", "heat"], tools: ["wooden chair", "oven mitts", "flour bag", "frying pan", "dish towel"] },
+  { t: "You are on a cruise ship that is sinking, and the lifeboats are full.", k: ["ship", "sinking", "lifeboat", "water", "deck", "raft", "swim"], tools: ["deck chair", "life ring", "fire hose", "barrel", "whistle"] },
+  { t: "The space station airlock is open and you have 30 seconds of air left.", k: ["space", "airlock", "air", "oxygen", "station", "seal", "vacuum"], tools: ["duct tape", "oxygen tank", "airlock door", "toolkit", "tether"] },
+  { t: "A Tyrannosaurus rex is sniffing around your overturned jeep in the rain.", k: ["trex", "dinosaur", "jeep", "rain", "sniff", "engine", "mud"], tools: ["flare", "jeep battery", "mud", "spare tire", "fuel line"] },
+  { t: "Zombies have surrounded the mall and the food court is out of snacks.", k: ["zombie", "mall", "food", "surrounded", "door", "noise", "escape"], tools: ["shopping cart", "mannequin", "fire axe", "vending machine", "escalator"] },
+  { t: "You stepped into quicksand and it is already at your waist.", k: ["quicksand", "waist", "sink", "rope", "branch", "slow", "pull"], tools: ["tree branch", "belt", "backpack", "vine", "bootlace"] },
+  { t: "The mirror in the hallway shows your reflection one second late. It just waved.", k: ["mirror", "reflection", "hallway", "wave", "glass", "break", "copy"], tools: ["hammer", "bedsheet", "salt", "flashlight", "door key"] },
+  { t: "Your robot vacuum has become sentient and is hunting you with a kitchen knife.", k: ["robot", "vacuum", "sentient", "knife", "kitchen", "stairs", "battery"], tools: ["broom", "phone charger", "throw rug", "water bottle", "chair"] },
+  { t: "A spider the size of a car is blocking the only exit to your apartment.", k: ["spider", "car", "exit", "apartment", "web", "legs", "door"], tools: ["hairspray", "lighter", "broom", "blanket", "fire extinguisher"] },
+  { t: "You are mid-flight and the plane door pops open at 30,000 feet.", k: ["plane", "door", "flight", "feet", "mask", "seatbelt", "pressure"], tools: ["oxygen mask", "seat cushion", "belt", "luggage", "curtain"] },
+  { t: "You are alone in the desert with no water and a broken radio.", k: ["desert", "water", "radio", "sun", "sand", "shade", "signal"], tools: ["car mirror", "shirt", "cactus", "antenna", "sand"] },
+  { t: "The ice beneath you is cracking and the lake is 200 feet deep.", k: ["ice", "cracking", "lake", "deep", "cold", "crawl", "water"], tools: ["backpack", "scarf", "branch", "boots", "fishing line"] },
+  { t: "The volcano you are hiking just erupted. A wall of ash is coming.", k: ["volcano", "erupted", "ash", "hiking", "lava", "mask", "run"], tools: ["bandana", "water bottle", "hiking pole", "car", "goggles"] },
+  { t: "A swarm of delivery drones has decided you are a package.", k: ["drone", "swarm", "package", "delivery", "sky", "net", "signal"], tools: ["wifi router", "fishing net", "laser pointer", "umbrella", "battery"] },
+  { t: "Your toaster is now president and has ordered your execution.", k: ["toaster", "president", "execution", "kitchen", "order", "power", "cord"], tools: ["power strip", "fork", "oven mitt", "bread", "fire extinguisher"] },
+  { t: "A vampire is standing in your doorway, politely waiting to be invited in.", k: ["vampire", "doorway", "invited", "door", "garlic", "sun", "mirror"], tools: ["garlic", "curtain", "mirror", "chair", "holy water"] },
+  { t: "A clown with a chainsaw is stuck in the ball pit with you.", k: ["clown", "chainsaw", "ball", "pit", "exit", "funny", "plastic"], tools: ["plastic balls", "net", "trampoline", "helmet", "whistle"] },
+  { t: "Your submarine is at 3,000 meters and the hull just made a noise.", k: ["submarine", "hull", "deep", "noise", "water", "pressure", "oxygen"], tools: ["wrench", "ballast", "torpedo tube", "duct tape", "sonar"] },
+  { t: "Grey aliens are beaming you up. You have one minute before liftoff.", k: ["alien", "beam", "liftoff", "ufo", "gravity", "light", "abduct"], tools: ["mirror", "tinfoil", "battery", "trampoline", "laser pointer"] },
+  { t: "A meteor the size of a bus is heading straight for your backyard.", k: ["meteor", "bus", "backyard", "impact", "sky", "bunker", "blast"], tools: ["shovel", "car", "trampoline", "garden hose", "mattress"] },
+  { t: "The office printer has become self-aware and is printing death threats.", k: ["printer", "office", "threats", "paper", "jam", "toner", "unplug"], tools: ["paper shredder", "toner cartridge", "scissors", "coffee", "fire alarm"] },
+  { t: "You are stuck in traffic and the car behind you has a bomb taped to it.", k: ["traffic", "car", "bomb", "taped", "road", "run", "distance"], tools: ["seatbelt", "window", "jacket", "phone", "fire extinguisher"] },
+  { t: "Your train is heading for a collapsed bridge and the brake cord is stuck.", k: ["train", "bridge", "brake", "collapsed", "tracks", "jump", "carriage"], tools: ["emergency hammer", "coat", "door lever", "fire extinguisher", "luggage"] },
+  { t: "Your hot air balloon is losing altitude over a forest fire.", k: ["balloon", "altitude", "forest", "fire", "basket", "burner", "wind"], tools: ["sandbag", "burner", "rope", "coat", "compass"] },
+  { t: "You fell into a shark tank at the aquarium wearing a meat costume.", k: ["shark", "tank", "aquarium", "meat", "costume", "water", "exit"], tools: ["costume strap", "bucket", "net", "ladder", "decoy"] },
+  { t: "You wake up in a pit of snakes with a flashlight and one shoe.", k: ["snake", "pit", "flashlight", "shoe", "wall", "climb", "venom"], tools: ["flashlight", "shoe", "belt", "stick", "jacket"] },
+  { t: "An avalanche is coming down the mountain and you are above the tree line.", k: ["avalanche", "mountain", "tree", "snow", "slope", "air", "dig"], tools: ["ski pole", "backpack", "jacket", "beacon", "shovel"] },
+  { t: "A wildfire is moving fast and you are on foot with no car.", k: ["wildfire", "fire", "foot", "car", "smoke", "wind", "water"], tools: ["wet shirt", "pond", "dirt", "road", "matches"] },
+  { t: "The dam broke and a wall of water is heading for your house.", k: ["dam", "water", "house", "wall", "roof", "high", "float"], tools: ["mattress", "ladder", "rope", "raft", "axe"] },
+  { t: "The nuclear reactor is melting down and you are the only one in the control room.", k: ["reactor", "meltdown", "control", "room", "coolant", "rods", "alarm"], tools: ["control rod", "coolant valve", "manual", "hazmat suit", "radio"] },
+  { t: "You are trapped inside a museum after hours with a stolen diamond.", k: ["museum", "diamond", "trapped", "guard", "alarm", "laser", "exit"], tools: ["diamond", "fire hose", "statue", "vent", "keycard"] },
+  { t: "A dragon just landed on your castle and wants your treasure.", k: ["dragon", "castle", "treasure", "fire", "scale", "tower", "gold"], tools: ["crossbow", "mirror", "trebuchet", "gold", "water well"] },
+  { t: "You have been accused of witchcraft and the mob is at your door.", k: ["witchcraft", "mob", "door", "accused", "fire", "escape", "trial"], tools: ["broom", "cauldron", "fake beard", "horse", "smoke"] },
+  { t: "You are in the Colosseum and a lion has just entered the arena.", k: ["colosseum", "lion", "arena", "sand", "gate", "spear", "crowd"], tools: ["spear", "net", "shield", "sand", "gate lever"] },
+  { t: "A cowboy challenges you to a duel at high noon. You have never held a gun.", k: ["cowboy", "duel", "noon", "gun", "town", "hat", "horse"], tools: ["hat", "mirror", "horse", "saloon door", "cactus"] },
+  { t: "The pirate captain says you must walk the plank into kraken waters.", k: ["pirate", "plank", "kraken", "water", "ship", "captain", "rope"], tools: ["rope", "cutlass", "barrel", "cannon", "parrot"] },
+  { t: "A kraken has wrapped a tentacle around your ship and is pulling it down.", k: ["kraken", "tentacle", "ship", "pull", "sea", "cut", "cannon"], tools: ["cannon", "cutlass", "anchor chain", "rum barrel", "harpoon"] },
+  { t: "You are at the top of a wizard's tower and the stairs just vanished.", k: ["wizard", "tower", "stairs", "vanish", "spell", "window", "rope"], tools: ["staff", "spellbook", "bedsheet", "candle", "owl"] },
+  { t: "You are trapped in a cursed video game and the timer is at 9 seconds.", k: ["cursed", "video", "game", "timer", "glitch", "reset", "controller"], tools: ["controller", "cartridge", "power cable", "cheat code", "TV remote"] },
+  { t: "The AI that runs your house has locked all the doors and turned off the heat.", k: ["ai", "house", "doors", "heat", "locked", "smart", "override"], tools: ["breaker box", "phone", "hammer", "smart speaker", "thermostat"] },
+  { t: "Grey goo nanobots are eating your floor from the inside out.", k: ["nanobot", "goo", "floor", "eat", "metal", "magnet", "freeze"], tools: ["magnet", "freezer", "salt", "vacuum", "EMP"] },
+  { t: "You are stuck in a time loop and have died 47 times already.", k: ["time", "loop", "died", "repeat", "remember", "clock", "break"], tools: ["clock", "notebook", "mirror", "watch", "photograph"] },
+  { t: "The walls of your room are slowly closing in. You have four feet left.", k: ["walls", "closing", "room", "feet", "door", "wedge", "ceiling"], tools: ["crowbar", "chair", "bed frame", "duct tape", "screwdriver"] },
+  { t: "Gravity has switched off in your office and you are drifting toward a window.", k: ["gravity", "office", "drifting", "window", "float", "desk", "hold"], tools: ["desk", "chair", "fire extinguisher", "cable", "coffee mug"] },
+  { t: "Your moon base just lost pressure and the rover is 300 meters away.", k: ["moon", "base", "pressure", "rover", "meters", "suit", "oxygen"], tools: ["oxygen tank", "rover", "duct tape", "suit patch", "flag"] },
+  { t: "A black hole is approaching your spaceship and the engines are offline.", k: ["black", "hole", "spaceship", "engines", "gravity", "orbit", "slingshot"], tools: ["thruster", "solar sail", "cargo", "reactor", "tether"] },
+  { t: "You meet an exact clone of yourself and only one of you is allowed to leave.", k: ["clone", "exact", "leave", "mirror", "identity", "trick", "fight"], tools: ["mirror", "ID card", "scissors", "photograph", "door"] },
+  { t: "A giant baby has picked up your house and is shaking it.", k: ["giant", "baby", "house", "shaking", "crib", "rattle", "calm"], tools: ["rattle", "milk bottle", "lullaby", "teddy bear", "pacifier"] },
+  { t: "An angry goose is guarding the only exit and it has a knife.", k: ["goose", "angry", "exit", "knife", "bird", "bread", "distract"], tools: ["bread", "jacket", "net", "broom", "bucket"] },
+  { t: "It is a full moon and your roommate just started growing fur.", k: ["moon", "roommate", "fur", "wolf", "door", "silver", "calm"], tools: ["silver fork", "door", "raw steak", "tranquilizer", "moonlight"] },
+  { t: "The seance worked and your dead relative wants to borrow your body.", k: ["seance", "dead", "relative", "body", "candle", "circle", "ghost"], tools: ["candle", "salt", "ouija board", "mirror", "bell"] },
+  { t: "The painting in your attic is aging every time you look at it.", k: ["painting", "attic", "aging", "look", "face", "canvas", "burn"], tools: ["paint thinner", "lighter", "blanket", "knife", "camera"] },
+  { t: "Your Roomba has learned to open doors and has been watching you sleep.", k: ["roomba", "doors", "watching", "sleep", "camera", "battery", "trap"], tools: ["broom", "chair", "phone charger", "box", "tape"] },
+  { t: "The escalator you are on is going faster and faster toward a wall of glass.", k: ["escalator", "faster", "wall", "glass", "rail", "jump", "brake"], tools: ["emergency stop", "jacket", "handrail", "briefcase", "shoelace"] },
+  { t: "You are stuck in a chimney and someone just lit a fire below.", k: ["chimney", "stuck", "fire", "below", "smoke", "climb", "brick"], tools: ["brick", "rope", "wet cloth", "boots", "soot"] },
+  { t: "Your wedding is under attack by a flock of furious doves.", k: ["wedding", "doves", "attack", "cake", "flowers", "feed", "net"], tools: ["cake", "bouquet", "net", "rice", "tablecloth"] },
+  { t: "Death itself is interviewing you for a job. The first question is 'why?'", k: ["death", "interview", "job", "question", "why", "answer", "scythe"], tools: ["resume", "scythe", "hourglass", "pen", "chair"] },
+  { t: "You are being audited by the tax office and they have found the thing.", k: ["audit", "tax", "office", "found", "receipt", "box", "lie"], tools: ["receipt", "shredder", "calculator", "coffee", "laptop"] },
+  { t: "A cargo cult has mistaken your drone for a god and is chasing it.", k: ["cargo", "cult", "drone", "god", "chase", "offering", "land"], tools: ["drone", "battery", "speaker", "tinsel", "parachute"] },
+  { t: "The traffic light outside has gone rogue and is directing cars into your living room.", k: ["traffic", "light", "rogue", "cars", "living", "room", "wire"], tools: ["traffic cone", "wire cutters", "coat", "sofa", "remote"] },
+  { t: "You are held hostage at a karaoke bar and must sing for your life.", k: ["karaoke", "hostage", "sing", "life", "microphone", "song", "crowd"], tools: ["microphone", "song list", "speaker cable", "chair", "spotlight"] },
+  { t: "A giant cake is collapsing on top of you at a birthday party.", k: ["cake", "giant", "collapsing", "birthday", "party", "fork", "plate"], tools: ["fork", "plate", "tablecloth", "candle", "chair"] },
+  { t: "A tidal wave of melted cheese is rolling down your street.", k: ["cheese", "wave", "street", "melted", "hill", "boat", "eat"], tools: ["surfboard", "nachos", "ladder", "boat", "straw"] },
+  { t: "Your sourdough starter has escaped the jar and is growing teeth.", k: ["sourdough", "starter", "jar", "teeth", "dough", "oven", "flour"], tools: ["oven", "flour", "jar lid", "knife", "yeast"] },
+  { t: "You accepted a hot sauce challenge and your mouth is now on fire.", k: ["hot", "sauce", "challenge", "mouth", "fire", "milk", "bread"], tools: ["milk", "bread", "ice cream", "sugar", "water"] },
+  { t: "You are riding a unicycle on a tightrope above a canyon. The seat is loose.", k: ["unicycle", "tightrope", "canyon", "seat", "loose", "balance", "rope"], tools: ["unicycle", "balance pole", "rope", "jacket", "parachute"] },
+  { t: "The library has gone silent in a way that is definitely not normal.", k: ["library", "silent", "normal", "books", "librarian", "whisper", "shelf"], tools: ["book", "ladder", "flashlight", "earplugs", "card catalog"] },
+  { t: "You opened the wrong door and are now in the dimension where socks go.", k: ["door", "dimension", "socks", "wrong", "portal", "laundry", "escape"], tools: ["sock", "dryer sheet", "hanger", "lint trap", "door handle"] },
+  { t: "A horde of squirrels has declared war on your bird feeder and you.", k: ["squirrel", "war", "bird", "feeder", "nuts", "tree", "dog"], tools: ["bird feeder", "nuts", "water hose", "dog", "slingshot"] },
+  { t: "You are babysitting a toddler who has discovered the nuclear launch codes.", k: ["toddler", "codes", "launch", "baby", "phone", "cookie", "nap"], tools: ["cookie", "cartoon", "phone", "teddy bear", "crib"] },
+  { t: "The ocean has started to glow and something enormous is surfacing.", k: ["ocean", "glow", "enormous", "surfacing", "water", "boat", "light"], tools: ["boat", "flare", "sonar", "harpoon", "camera"] },
+  { t: "You are handcuffed to a briefcase that is beeping faster and faster.", k: ["handcuffed", "briefcase", "beeping", "faster", "key", "cut", "distance"], tools: ["bobby pin", "saw", "fire axe", "crowbar", "key"] }
+];
+
+const PACKS = [
+  { id: 'all', name: 'EVERYTHING', desc: 'The full graveyard. 75 ways to go.' },
+  { id: 'cosmic', name: 'COSMIC HORROR', desc: 'Space, aliens, black holes and bad air.', tags: ['space', 'alien', 'moon', 'meteor', 'black', 'gravity', 'nanobot', 'time', 'clone'] },
+  { id: 'office', name: 'OFFICE HELL', desc: 'Printers, audits and hostile furniture.', tags: ['office', 'printer', 'traffic', 'escalator', 'audit', 'meeting'] },
+  { id: 'beast', name: 'BEAST MODE', desc: 'Teeth, claws and one deeply angry goose.', tags: ['bees', 'trex', 'spider', 'shark', 'snake', 'lion', 'goose', 'squirrel', 'wolf', 'kraken'] },
+  { id: 'doom', name: 'NATURAL DOOM', desc: 'Lava, ice, fire, water and gravity.', tags: ['lava', 'volcano', 'ice', 'avalanche', 'wildfire', 'flood', 'dam', 'quicksand', 'desert', 'ocean'] },
+  { id: 'cursed', name: 'CURSED OBJECTS', desc: 'Haunted junk with a grudge.', tags: ['mirror', 'painting', 'seance', 'doll', 'toaster', 'roomba', 'video', 'sourdough', 'sock'] },
+  { id: 'chaos', name: 'CHAOS PACK', desc: 'WIP prompts. Nonsense. Perfect.', tags: ['cake', 'cheese', 'karaoke', 'unicycle', 'toddler', 'sock', 'goose', 'wedding', 'hot'] }
+];
+
+const AVATARS = [
+  { name: 'REAPER', c: '#ff5a2b', p: 0 },
+  { name: 'MOTH', c: '#ffc857', p: 1 },
+  { name: 'VOID', c: '#b48cff', p: 2 },
+  { name: 'EMBER', c: '#ff2d55', p: 3 },
+  { name: 'STATIC', c: '#5bc8ff', p: 4 },
+  { name: 'BONE', c: '#ece9df', p: 5 },
+  { name: 'HEX', c: '#5df2a0', p: 6 },
+  { name: 'TIDE', c: '#59e0d8', p: 7 }
+];
+
+const RIVAL_NAMES = ['VEX', 'MOTH', 'PIP', 'NOVA', 'GRIM', 'ECHO', 'NULL', 'CINDER'];
+
+const TACTICS = [
+  'I run for the nearest exit and do not look back',
+  'I hide behind the biggest thing I can find',
+  'I climb onto the highest surface within reach',
+  'I grab the nearest heavy object and swing',
+  'I jam the mechanism with anything metal',
+  'I make a loud noise on the far side of the room',
+  'I barricade the door with furniture',
+  'I crawl through the smallest gap I can fit through',
+  'I tie everything together into one long rope',
+  'I break the window and use the frame as a ladder',
+  'I flip the nearest switch and pray it is the right one',
+  'I cover myself in whatever is closest and stay still',
+  'I throw the first thing I can lift at the problem',
+  'I wedge something into the gap before it closes',
+  'I follow the cable back to whatever is controlling this',
+  'I use the reflection to see what is behind me',
+  'I count to three and sprint',
+  'I talk to it calmly and back away slowly'
+];
+
+const DETAILS = [
+  'counting to three first',
+  'using my belt as a strap',
+  'keeping low the whole time',
+  'with my sleeve over my mouth',
+  'at a dead sprint',
+  'one careful step at a time',
+  'while screaming the whole way',
+  'with both hands free',
+  'before it notices me',
+  'and I do not stop until I am outside'
+];
+
+const GEN_TOOLS = ['fire axe', 'crowbar', 'duct tape', 'rope', 'flashlight', 'belt', 'chair leg', 'fire extinguisher', 'coat', 'phone', 'bucket', 'pipe', 'shoelace', 'backpack'];
+
+const FORGE = {
+  open: ['I grab', 'I use', 'I take', 'First I grab', 'I snatch', 'I wedge', 'I rip loose', 'I kick over'],
+  tool: ['the fire axe', 'a crowbar', 'my belt', 'the broken chair', 'a flare', 'the rope', 'the nearest pipe', 'my boot', 'a kitchen knife', 'the extinguisher', 'a loose brick', 'the metal shelf'],
+  act: ['and smash the window', 'and pry the door open', 'and cut the cable', 'and barricade the door', 'and jam the gears', 'and short the panel', 'and tie it to the railing', 'and wedge it under the frame'],
+  move: ['then climb down the outside wall', 'then sprint for the stairwell', 'then crawl through the vent', 'then dive behind cover', 'then slide under the gate', 'then run along the ledge', 'then drop to the floor below', 'then circle around the back'],
+  twist: ['using the curtains as a rope', 'before the timer hits zero', 'while counting to three', 'and drag the others with me', 'then seal the breach with tape', 'and signal the rescue drone', 'with my sleeve over my mouth', 'and I do not look back']
+};
+
+const NARRATION = [
+  'The AI leans forward. Somewhere, a server fan spins up.',
+  'A scoreboard flickers. Nobody is winning yet.',
+  'The judge pauses. It is either thinking or buffering.',
+  'Thunder. Probably unrelated. Probably.',
+  'The contestants exchange looks. One of them is sweating.',
+  'A single cursor blinks on an empty screen. It feels personal.',
+  'The AI clears its throat. It does not have a throat.',
+  'Somewhere a printer jams. The AI takes this as applause.',
+  'The arena smells like ozone and bad decisions.',
+  'The AI has already decided. It is just being dramatic.'
+];
+
+const JUDGE_QUIPS_PASS = [
+  'Ugh. Fine. That actually works.',
+  'Competent. I hate competent.',
+  'The physics check out. Annoying.',
+  'I have seen worse. Rarely.',
+  'You live. Do not make it a habit.',
+  'Barely. But yes.',
+  'The plan is stupid and it works.',
+  'I docked points for style. You live anyway.',
+  'Correct. Unfortunately.',
+  'You bought yourself a round.'
+];
+const JUDGE_QUIPS_FAIL = [
+  'That is not a plan. That is a wish.',
+  'You die. The details are unflattering.',
+  'Bold. Wrong. Dead.',
+  'I have run the numbers. You are paste.',
+  'The plan fails at step one.',
+  'You forgot the part where you do not die.',
+  'Death. Next.',
+  'The AI yawns. You are already gone.',
+  'That was a sentence, not a strategy.',
+  'You die in a way that will be memed.'
+];
+const JUDGE_QUIPS_BANNED = [
+  'Forbidden word. The arena does not care how good the plan was.',
+  'You said the quiet part out loud. Dead.',
+  'A banned word. A banned life.',
+  'The rules are the only thing here that is not negotiable.',
+  'You broke the one rule. It broke you back.'
+];
+const JUDGE_QUIPS_CHEESE = [
+  'A dream? Really? ...It works. This time.',
+  'The oldest trick in the book. The book is on fire.',
+  'You woke up. I allow it. For now.',
+  'Plot armor detected. I am disgusted.',
+  'This should not work. The crowd loves it.'
+];
+
+const CHEESE_PATTERNS = [
+  /\bdream(ed|ing|s)?\b/, /\bwoke up\b/, /\bwake up\b/, /\bpinch(ed)? myself\b/,
+  /\bit was all\b/, /\bnone of this (is|was) real\b/, /\bunharmed\b/, /\bplot armor\b/,
+  /\bi (just )?respawn(ed)?\b/, /\bnot real\b/, /\bsimulation\b/, /\bcut to black\b/,
+  /\broll credits\b/, /\bnarrator\b/
+];
+
+const BANNED = [
+  { w: 'survive', re: /\bsurviv(e|es|ed|ing|al|or)\b/ },
+  { w: 'win', re: /\bwin(s|ning|ner)?\b|\bwon\b/ },
+  { w: 'safe', re: /\bsafe(r|st|ly)?\b/ },
+  { w: 'safety', re: /\bsafety\b/ },
+  { w: 'alive', re: /\balive\b/ }
+];
+
+/* =========================================================================
+   ACHIEVEMENTS
+   ========================================================================= */
+const ACH = [
+  { id: 'first',    n: 'FIRST BLOOD',      d: 'Die for the first time.' },
+  { id: 'flawless', n: 'NOT TODAY',        d: 'Finish a run without dying.' },
+  { id: 'wordsmith',n: 'WORDSMITH',        d: 'Score 95 or higher in a round.' },
+  { id: 'perfect',  n: 'SILVER TONGUE',    d: 'Score a perfect 100.' },
+  { id: 'banned',   n: 'CURSED TONGUE',    d: 'Use a forbidden word.' },
+  { id: 'cheese',   n: 'FROMAGER',         d: 'Make a dream/cheese answer work.' },
+  { id: 'lone',     n: 'LONE WOLF',        d: 'Win a Lone Survivor match.' },
+  { id: 'champ',    n: 'JUDGEMENT',        d: 'Win a Judgement Day match.' },
+  { id: 'veteran',  n: 'REPEAT OFFENDER',  d: 'Play 10 runs.' },
+  { id: 'daily',    n: 'DOOMED DAILY',     d: 'Clear a Daily Doom.' },
+  { id: 'comeback', n: 'COMEBACK',         d: 'Win after trailing at round 3.' },
+  { id: 'streak',   n: 'NINE LIVES',       d: 'Reach a 10-round survival streak.' }
+];
+
+const THRESH = [42, 50, 58];
+
+/* =========================================================================
+   JUDGE ENGINE - deterministic-ish scoring from the text alone
+   ========================================================================= */
+const ACTIONS = new Set(('grab use run sprint hide climb jump crawl throw cut pry smash build tie wedge swim dive duck roll ' +
+  'signal call radio dig burn freeze distract bargain hack reroute seal weld tape lash anchor shove block cover douse ' +
+  'extinguish kick slam brace slide leap dash drag push pull lift strap lock jam short break shield swing aim fire ' +
+  'launch pour spray soak balance whistle shout whisper sing lie pretend negotiate bribe feed lure trap net hook reel ' +
+  'steer drive ride sail row paddle board plug patch bolt screw unscrew wrap coil knot loop hoist lower raise prop ' +
+  'chock barricade fortify evacuate retreat flank circle follow track mark map measure time calculate tuck sprint ' +
+  'crouch vault somersault squeeze wriggle pry unscrew unplug disconnect reconnect override bypass reboot reset').split(' '));
+
+const HEDGES = new Set(('maybe perhaps probably might could hopefully try tries trying guess wish luck chance possibly ' +
+  'unsure think whatever somehow soon eventually pray').split(' '));
+
+const CONFIDENT = ['i grab', 'i use', 'i will', 'i immediately', 'instantly', 'without hesitation', 'precisely',
+  'exactly', 'calmly', 'definitely', 'no problem', 'easily', 'step one', 'at once', 'right away', 'i sprint', 'i dive'];
+
+const SEQUENCE = new Set(('first then after before finally meanwhile while until once next because so therefore instead ' +
+  'second third last afterward').split(' '));
+
+const SPECIFIC = new Set(('tape rope belt wire metal glass wood brick cloth sheet blanket towel shirt jacket shoe boot ' +
+  'knife axe crowbar pipe cable chain ladder chair table door window fire water sand salt ice oil fuel battery magnet ' +
+  'mirror flashlight flare extinguisher feet meters seconds minutes degrees floors pounds inches').split(' '));
+
+const STOPWORDS = new Set(('the and with from into onto your this that then than over under while before after about ' +
+  'around through for not but you are was were have has had will would can could should its they them their there ' +
+  'here what when where which who how why all any some very just like keep keeps kept').split(' '));
+
+const CREATIVE = ['like a', 'as if', 'imagine', 'pretend', 'bluff', 'fake', 'decoy', 'reverse', 'surprise',
+  'unexpected', 'weird', 'bizarre', 'ironically', 'turns out', 'somehow', 'apparently', 'unfortunately'];
+
+function wordsOf(s) {
+  return String(s || '').toLowerCase().match(/[a-z0-9']+/g) || [];
+}
+function jaccard(a, b) {
+  const A = new Set(a), B = new Set(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  A.forEach(x => { if (B.has(x)) inter++; });
+  return inter / (A.size + B.size - inter);
+}
+
+function judgeAnswer(text, sc, player, rng) {
+  const raw = String(text || '').trim();
+  const low = ' ' + raw.toLowerCase() + ' ';
+  const words = wordsOf(raw);
+  const uniq = Array.from(new Set(words));
+  const threshold = THRESH[G.settings.difficulty] || 50;
+  const tags = [];
+
+  let banned = null;
+  for (let i = 0; i < BANNED.length; i++) {
+    if (BANNED[i].re.test(low)) { banned = BANNED[i].w; break; }
+  }
+
+  let cheese = 0;
+  for (let i = 0; i < CHEESE_PATTERNS.length; i++) if (CHEESE_PATTERNS[i].test(low)) cheese++;
+
+  if (banned) {
+    return {
+      score: 0, pass: false, banned: banned, cheese: cheese > 0,
+      quip: pickR(JUDGE_QUIPS_BANNED, rng),
+      tags: ['FORBIDDEN: ' + banned.toUpperCase()]
+    };
+  }
+
+  if (raw.length < 4) {
+    return {
+      score: 0, pass: false, banned: null, cheese: false,
+      quip: 'Silence is not a strategy. It is a cause of death.',
+      tags: ['NO ANSWER']
+    };
+  }
+
+  let kw = 0;
+  for (let i = 0; i < sc.k.length; i++) {
+    const k = sc.k[i];
+    if (low.indexOf(k) >= 0) kw++;
+  }
+
+  // Tools named in the scenario count as relevance too - this is what makes the
+  // Phrase Forge (the no-mic fallback) a real strategy instead of a death sentence.
+  const toolHay = ((sc.tools || []).join(' ') + ' ' + (sc.t || '')).toLowerCase();
+  let toolHits = 0;
+  for (let i = 0; i < uniq.length; i++) {
+    const w = uniq[i];
+    if (w.length > 3 && !STOPWORDS.has(w) && sc.k.indexOf(w) < 0 && toolHay.indexOf(w) >= 0) toolHits++;
+  }
+  toolHits = Math.min(3, toolHits);
+
+  let acts = 0;
+  for (let i = 0; i < uniq.length; i++) if (ACTIONS.has(uniq[i])) acts++;
+  let hedges = 0;
+  for (let i = 0; i < uniq.length; i++) if (HEDGES.has(uniq[i])) hedges++;
+  let seq = 0;
+  for (let i = 0; i < uniq.length; i++) if (SEQUENCE.has(uniq[i])) seq++;
+  let spec = 0;
+  for (let i = 0; i < uniq.length; i++) if (SPECIFIC.has(uniq[i])) spec++;
+  const digits = (raw.match(/\d+/g) || []).length;
+  let conf = 0;
+  for (let i = 0; i < CONFIDENT.length; i++) if (low.indexOf(CONFIDENT[i]) >= 0) conf++;
+  let creat = 0;
+  for (let i = 0; i < CREATIVE.length; i++) if (low.indexOf(CREATIVE[i]) >= 0) creat++;
+
+  // repetition penalty against this player's earlier answers
+  let rep = 0;
+  for (let i = 0; i < player.prevAnswers.length; i++) {
+    rep = Math.max(rep, jaccard(words, wordsOf(player.prevAnswers[i])));
+  }
+  const repPenalty = Math.max(0, rep - 0.34) * 46;
+
+  let score = 8;
+  score += Math.min(21, words.length * 0.9);
+  score += Math.min(26, kw * 7 + toolHits * 4);
+  score += Math.min(22, acts * 4);
+  score += Math.min(9, seq * 3);
+  score += Math.min(10, spec * 3 + digits * 2);
+  score += Math.min(6, creat * 3);
+  score += Math.min(7, conf * 2);
+  score -= Math.min(16, hedges * 4);
+  score -= repPenalty;
+  if (words.length < 6) score -= 10;
+  if (kw === 0 && toolHits === 0) score -= 4;
+
+  let cheeseBonus = 0;
+  if (cheese > 0) {
+    const n = player.cheeseUsed;
+    cheeseBonus = n === 0 ? 17 : (n === 1 ? 6 : (n === 2 ? -5 : Math.max(-30, -15 - (n - 3) * 5)));
+    player.cheeseUsed++;
+    tags.push(n === 0 ? 'CHEESE (WORKS)' : 'CHEESE (STALE)');
+  }
+
+  score += cheeseBonus;
+  score += (rng() * 10 - 5);
+
+  // rival skill bias
+  if (!player.isYou) score += (player.skill - 0.55) * 16;
+
+  score = Math.round(clamp(score, 1, 100));
+
+  if (kw >= 2) tags.push('RELEVANT');
+  if (acts >= 3) tags.push('TACTICAL');
+  if (spec + digits >= 2) tags.push('SPECIFIC');
+  if (hedges >= 2) tags.push('HEDGING');
+  if (rep > 0.5) tags.push('REPEATING YOURSELF');
+  if (words.length > 34) tags.push('OVERLONG');
+  if (words.length < 8) tags.push('THIN');
+
+  const pass = score >= threshold;
+  let quip;
+  if (pass && cheese > 0) quip = pickR(JUDGE_QUIPS_CHEESE, rng);
+  else quip = pass ? pickR(JUDGE_QUIPS_PASS, rng) : pickR(JUDGE_QUIPS_FAIL, rng);
+
+  return { score: score, pass: pass, banned: null, cheese: cheese > 0, quip: quip, tags: tags.slice(0, 2) };
+}
+
+/* =========================================================================
+   RIVAL BRAIN
+   ========================================================================= */
+function makeRivalAnswer(sc, skill, rng) {
+  const tool = rng() < 0.5 && sc.tools && sc.tools.length
+    ? sc.tools[Math.floor(rng() * sc.tools.length)]
+    : GEN_TOOLS[Math.floor(rng() * GEN_TOOLS.length)];
+
+  const parts = [pickR(TACTICS, rng)];
+  if (rng() < 0.35 + skill * 0.55) {
+    parts.push(pickR(['using the ' + tool, 'with the ' + tool, 'grabbing the ' + tool, 'and I keep the ' + tool + ' in reach'], rng));
+  }
+  if (rng() < 0.55 + skill * 0.3) parts.push(pickR(DETAILS, rng));
+  if (skill > 0.55 && rng() < skill * 0.8) parts.push(pickR(TACTICS, rng).replace(/^I /, 'Then I '));
+
+  let s = parts[0];
+  for (let i = 1; i < parts.length; i++) s += ', ' + parts[i];
+  if (rng() < 0.55) s += ' I keep my eyes on the ' + pickR(sc.k, rng) + ' the whole time.';
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  if (!/[.!?]$/.test(s)) s += '.';
+
+  if (rng() < 0.06 && skill < 0.6) s = s.replace(/\b(exit|escape route|door)\b/i, 'survival route');
+  return s;
+}
+
+/* =========================================================================
+   VOICE / PTT
+   ========================================================================= */
+const Voice = {
+  rec: null, stream: null, analyser: null, data: null, raf: null,
+  on: false, level: 0, t0: 0, stopping: false,
+  supported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); },
+  start() {
+    if (this.on || !S.run || S.run.phase !== 'answer') return;
+    initAudio();
+    this.on = true; this.stopping = false; this.level = 0; this.t0 = performance.now();
+    S.run.listening = true;
+    S.run.voiceFinal = '';
+    S.run.voiceInterim = '';
+    S.run.voiceMode = this.supported() ? 'speech' : 'meter';
+    sfx('voiceOn');
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(st => {
+        if (!this.on) { st.getTracks().forEach(t => t.stop()); return; }
+        this.stream = st;
+        try {
+          if (!AC) initAudio();
+          if (!AC) return;
+          const src = AC.createMediaStreamSource(st);
+          this.analyser = AC.createAnalyser();
+          this.analyser.fftSize = 256;
+          src.connect(this.analyser);
+          this.data = new Uint8Array(this.analyser.frequencyBinCount);
+          const tick = () => {
+            if (!this.on) return;
+            this.analyser.getByteFrequencyData(this.data);
+            let sum = 0;
+            for (let i = 0; i < this.data.length; i++) sum += this.data[i];
+            this.level = Math.min(1, (sum / this.data.length) / 85);
+            this.raf = requestAnimationFrame(tick);
+          };
+          tick();
+        } catch (e) {}
+      }).catch(() => {});
+    }
+
+    if (this.supported()) {
+      try {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        this.rec = new SR();
+        this.rec.continuous = true;
+        this.rec.interimResults = true;
+        this.rec.lang = 'en-US';
+        this.rec.onresult = e => {
+          if (!S.run) return;
+          let fin = '', inter = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const r = e.results[i];
+            if (r.isFinal) fin += r[0].transcript + ' ';
+            else inter += r[0].transcript;
+          }
+          if (fin) S.run.voiceFinal = (S.run.voiceFinal || '') + fin;
+          S.run.voiceInterim = inter;
+        };
+        this.rec.onerror = () => {};
+        this.rec.onend = () => {
+          if (this.on && !this.stopping) { try { this.rec.start(); } catch (e) {} }
+        };
+        this.rec.start();
+      } catch (e) { this.rec = null; }
+    }
+  },
+  stop(cb) {
+    if (!this.on) { if (cb) cb(); return; }
+    this.on = false; this.stopping = true; this.level = 0;
+    if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
+    if (this.rec) {
+      try { this.rec.stop(); } catch (e) {}
+      setTimeout(() => { try { this.rec.abort(); } catch (e) {} }, 260);
+    }
+    if (this.stream) {
+      try { this.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      this.stream = null;
+    }
+    this.analyser = null;
+    if (S.run) S.run.listening = false;
+    sfx('voiceOff');
+    const wait = this.rec ? 420 : 40;
+    setTimeout(() => { if (cb) cb(); }, wait);
+  }
+};
+
+/* =========================================================================
+   PHRASE FORGE - the fallback answer builder
+   ========================================================================= */
+function forgeOpts(sc) {
+  const tools = [];
+  (sc.tools || []).forEach(t => tools.push('the ' + t));
+  FORGE.tool.forEach(t => tools.push(t));
+  return { open: FORGE.open, tool: tools, act: FORGE.act, move: FORGE.move, twist: FORGE.twist };
+}
+function openForge() {
+  if (!S.run) return;
+  const o = forgeOpts(S.run.scenario);
+  S.run.forge = {
+    slot: 0,
+    idx: [
+      Math.floor(Math.random() * o.open.length),
+      Math.floor(Math.random() * o.tool.length),
+      Math.floor(Math.random() * o.act.length),
+      Math.floor(Math.random() * o.move.length),
+      Math.floor(Math.random() * o.twist.length)
+    ]
+  };
+  S.run.phase = 'forge';
+  S.run.t = 0;
+  sfx('select');
+}
+function forgeText(run) {
+  const o = forgeOpts(run.scenario);
+  const f = run.forge;
+  return o.open[f.idx[0] % o.open.length] + ' ' +
+         o.tool[f.idx[1] % o.tool.length] + ' ' +
+         o.act[f.idx[2] % o.act.length] + ', ' +
+         o.move[f.idx[3] % o.move.length] + ' ' +
+         o.twist[f.idx[4] % o.twist.length] + '. ' +
+         'I move without hesitation.';
+}
+function forgeMove(dir) {
+  const run = S.run;
+  if (!run || !run.forge) return;
+  const o = forgeOpts(run.scenario);
+  const f = run.forge;
+  const key = ['open', 'tool', 'act', 'move', 'twist'][f.slot];
+  const len = o[key].length;
+  f.idx[f.slot] = (f.idx[f.slot] + dir + len) % len;
+  sfx('move');
+}
+function forgeNext() {
+  const run = S.run;
+  if (!run || !run.forge) return;
+  if (run.forge.slot < 4) { run.forge.slot++; sfx('select'); }
+  else {
+    run.answer = forgeText(run);
+    run.usedForge = true;
+    run.phase = 'confirm';
+    run.t = 0;
+    sfx('select');
+  }
+}
+
+/* =========================================================================
+   STATE
+   ========================================================================= */
+const S = {
+  screen: 'title',
+  t: 0,
+  menu: 0,
+  pack: 0,
+  avatar: 0,
+  mod: 0,
+  help: 0,
+  setIdx: 0,
+  statsIdx: 0,
+  aboutIdx: 0,
+  run: null,
+  toast: null,
+  toastT: 0,
+  shake: 0,
+  fade: 1,
+  flashT: 0,
+  lastInput: 0,
+  glitch: 0,
+  menuWin: 0
+};
+
+const MENU = [
+  { id: 'judgement', label: 'JUDGEMENT DAY', sub: 'Most points after 5 rounds' },
+  { id: 'lone',      label: 'LONE SURVIVOR', sub: 'Only one walks away each round' },
+  { id: 'daily',     label: 'DAILY DOOM',    sub: 'Same death. Everyone. Every day.' },
+  { id: 'custom',    label: 'CUSTOM SCENARIOS', sub: 'Pick a pack of ways to die' },
+  { id: 'help',      label: 'HOW TO PLAY',   sub: 'Rules, buttons, forbidden words' },
+  { id: 'stats',     label: 'STATS & TROPHIES', sub: 'Your record of bad decisions' },
+  { id: 'settings',  label: 'SETTINGS',      sub: 'Sound, narrator, difficulty' },
+  { id: 'about',     label: 'CREDITS',       sub: 'Who to blame for this' }
+];
+
+const SETTINGS_ROWS = [
+  { k: 'sound',      label: 'SOUND',       vals: ['OFF', 'ON'] },
+  { k: 'narrator',   label: 'AI NARRATOR', vals: ['OFF', 'ON'] },
+  { k: 'fx',         label: 'CRT EFFECTS', vals: ['OFF', 'ON'] },
+  { k: 'difficulty', label: 'DIFFICULTY',  vals: ['FORGIVING', 'STANDARD', 'MERCILESS'] },
+  { k: 'bonus',      label: 'BONUS ROUNDS',vals: ['OFF', 'ON'] },
+  { k: 'erase',      label: 'ERASE ALL DATA', vals: ['HOLD...', 'ARMED'] }
+];
+
+function toast(msg, color) {
+  S.toast = msg;
+  S.toastT = 2.8;
+  S.toastColor = color || C.gold;
+}
+
+function unlock(id) {
+  if (G.ach[id]) return false;
+  G.ach[id] = Date.now();
+  save();
+  const a = ACH.find(x => x.id === id);
+  if (a) {
+    toast('TROPHY: ' + a.n, C.gold);
+    sfx('achieve');
+    if (S.run) S.run.newAch.push(a.n);
+  }
+  return true;
+}
+
+/* =========================================================================
+   RUN LIFECYCLE
+   ========================================================================= */
+function dayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+function packPool(id) {
+  if (id === 'all') return SCEN;
+  const p = PACKS.find(x => x.id === id);
+  if (!p || !p.tags) return SCEN;
+  const out = SCEN.filter(sc => {
+    const hay = (sc.t + ' ' + sc.k.join(' ')).toLowerCase();
+    return p.tags.some(tag => hay.indexOf(tag) >= 0);
+  });
+  return out.length >= 5 ? out : SCEN;
+}
+
+function startRun(mode, packId) {
+  const isDaily = mode === 'daily';
+  const seed = isDaily ? hashStr('jba-' + dayKey()) : (Date.now() ^ 0x9e3779b9);
+  const rng = mulberry32(seed);
+
+  const roster = [];
+  const avTaken = [G.avatar];
+
+  const you = {
+    id: 0, name: 'YOU', av: G.avatar, isYou: true, skill: 1,
+    points: 0, survives: 0, deaths: 0, prevAnswers: [], cheeseUsed: 0,
+    answer: '', score: 0, pass: null, gained: 0, cheese: false, banned: null,
+    quip: '', tags: [], place: 1
+  };
+  roster.push(you);
+
+  const names = RIVAL_NAMES.slice();
+  for (let i = names.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = names[i]; names[i] = names[j]; names[j] = tmp;
+  }
+  const skills = [0.86, 0.68, 0.5];
+  for (let i = skills.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = skills[i]; skills[i] = skills[j]; skills[j] = tmp;
+  }
+
+  for (let i = 0; i < 3; i++) {
+    let av = Math.floor(rng() * AVATARS.length);
+    let guard = 0;
+    while (avTaken.indexOf(av) >= 0 && guard++ < 30) av = Math.floor(rng() * AVATARS.length);
+    avTaken.push(av);
+    roster.push({
+      id: i + 1, name: names[i], av: av, isYou: false, skill: skills[i],
+      points: 0, survives: 0, deaths: 0, prevAnswers: [], cheeseUsed: 0,
+      answer: '', score: 0, pass: null, gained: 0, cheese: false, banned: null,
+      quip: '', tags: [], place: 1
+    });
+  }
+
+  S.run = {
+    mode: mode, pack: packId || 'all',
+    round: 0, totalRounds: 5,
+    players: roster, you: you, used: [],
+    phase: 'intro', t: 0, answer: '', timeLeft: 60,
+    listening: false, voiceFinal: '', voiceInterim: '', voiceMode: '',
+    verdicts: [], vi: 0, judgeT: 0,
+    seed: seed, rng: rng, deck: [],
+    bonus: false, mult: 1,
+    forge: null, usedForge: false,
+    narration: '', narrT: 0,
+    newAch: [], trailingAt3: false,
+    lastTick: 60, finalIdx: 0, roundPoints: 0
+  };
+
+  if (isDaily) {
+    const d = SCEN.slice();
+    for (let i = d.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = d[i]; d[i] = d[j]; d[j] = tmp;
+    }
+    S.run.deck = d.slice(0, 5);
+  }
+
+  G.stats.runs++;
+  if (G.stats.runs >= 10) unlock('veteran');
+  save();
+
+  S.screen = 'play';
+  S.t = 0;
+  S.fade = 1;
+  S.run.rng = mulberry32(seed);
+  nextRound();
+}
+
+function pickScenario(run) {
+  if (run.mode === 'daily') return run.deck[run.round - 1];
+  const pool = packPool(run.pack);
+  let avail = pool.filter(sc => run.used.indexOf(sc.t) < 0);
+  if (!avail.length) avail = pool;
+  return pickR(avail, run.rng);
+}
+
+function nextRound() {
+  const run = S.run;
+  if (!run) return;
+  run.round++;
+  if (run.round > run.totalRounds) { finishRun(); return; }
+
+  run.scenario = pickScenario(run);
+  if (!run.scenario) run.scenario = SCEN[0];
+  run.used.push(run.scenario.t);
+  run.phase = 'intro';
+  run.t = 0;
+  run.answer = '';
+  run.voiceFinal = '';
+  run.voiceInterim = '';
+  run.timeLeft = 60;
+  run.listening = false;
+  run.verdicts = [];
+  run.vi = 0;
+  run.forge = null;
+  run.usedForge = false;
+  run.roundPoints = 0;
+  run.mult = (G.settings.bonus && (run.round === 3 || run.round === 5)) ? (run.round === 3 ? 2 : 3) : 1;
+  run.bonus = run.mult > 1;
+  run.narration = G.settings.narrator ? pickR(NARRATION, run.rng) : '';
+  run.narrT = 0;
+
+  for (let i = 0; i < run.players.length; i++) {
+    const p = run.players[i];
+    p.answer = ''; p.score = 0; p.pass = null; p.gained = 0;
+    p.cheese = false; p.banned = null; p.quip = ''; p.tags = [];
+  }
+  sfx('round');
+}
+
+function beginAnswer() {
+  const run = S.run;
+  if (!run || run.phase !== 'intro') return;
+  run.phase = 'answer';
+  run.t = 0;
+  run.timeLeft = 60;
+  run.answer = '';
+  run.voiceFinal = '';
+  run.voiceInterim = '';
+  run.lastTick = 60;
+  sfx('select');
+}
+
+function answerComposed(run) {
+  return (run.answer + ' ' + (run.voiceFinal || '') + ' ' + (run.voiceInterim || ''))
+    .replace(/\s+/g, ' ').trim();
+}
+
+function submitAnswer() {
+  const run = S.run;
+  if (!run) return;
+  if (run.phase !== 'answer' && run.phase !== 'confirm') return;
+  run.answer = answerComposed(run);
+  run.voiceFinal = '';
+  run.voiceInterim = '';
+  run.phase = 'judging';
+  run.t = 0;
+  run.judgeT = 0;
+  sfx('judge');
+  resolveRound();
+}
+
+function resolveRound() {
+  const run = S.run;
+  const sc = run.scenario;
+  const rng = mulberry32(run.seed ^ (run.round * 7919) ^ 0x51ed);
+
+  for (let i = 0; i < run.players.length; i++) {
+    const p = run.players[i];
+    if (!p.isYou) p.answer = makeRivalAnswer(sc, p.skill, rng);
+    const text = p.isYou ? run.answer : p.answer;
+    p.answer = text;
+    const res = judgeAnswer(text, sc, p, rng);
+    p.score = res.score;
+    p.pass = res.pass;
+    p.banned = res.banned;
+    p.cheese = res.cheese;
+    p.quip = res.quip;
+    p.tags = res.tags;
+    p.prevAnswers.push(text);
+    if (p.prevAnswers.length > 4) p.prevAnswers.shift();
+    p.gained = 0;
+    if (res.pass) {
+      const base = 100 + Math.max(0, res.score - (THRESH[G.settings.difficulty] || 50)) * 2;
+      p.gained = Math.round(base * (p.isYou ? run.mult : (G.settings.bonus && run.bonus ? run.mult : 1)));
+    }
+  }
+
+  if (run.mode === 'lone') {
+    // Lone Survivor always spares exactly one credible contestant.
+    let best = null;
+    for (let i = 0; i < run.players.length; i++) {
+      const p = run.players[i];
+      if (p.banned) continue;
+      if (!String(p.answer || '').trim()) continue;
+      if (!best || p.score > best.score) best = p;
+    }
+    for (let i = 0; i < run.players.length; i++) {
+      const p = run.players[i];
+      if (p !== best) { p.pass = false; p.gained = 0; }
+      else {
+        p.pass = true;
+        p.gained = Math.round((120 + p.score * 1.2) * (G.settings.bonus && run.bonus ? run.mult : 1));
+        if (p.score < (THRESH[G.settings.difficulty] || 50)) p.tags.push('BARELY SPARED');
+      }
+    }
+  }
+
+  // order verdicts: rivals first, you last
+  const order = run.players.filter(p => !p.isYou).concat(run.players.filter(p => p.isYou));
+  run.verdicts = order;
+  run.vi = 0;
+  run.t = 0;
+
+  let anySurv = false;
+  for (let i = 0; i < run.players.length; i++) {
+    const p = run.players[i];
+    if (p.pass) {
+      p.points += p.gained;
+      p.survives++;
+      anySurv = true;
+    } else {
+      p.deaths++;
+    }
+    if (p.isYou) {
+      if (p.pass) {
+        G.stats.survives++;
+        G.stats.streak++;
+        if (G.stats.streak > G.stats.bestStreak) G.stats.bestStreak = G.stats.streak;
+      } else {
+        G.stats.deaths++;
+        G.stats.streak = 0;
+      }
+      if (p.cheese && p.pass) { G.stats.cheese++; unlock('cheese'); }
+      if (p.banned) { G.stats.banned++; unlock('banned'); }
+      if (p.score >= 95) unlock('wordsmith');
+      if (p.score >= 100) unlock('perfect');
+      if (!p.pass) unlock('first');
+    }
+  }
+  G.stats.rounds++;
+  if (G.stats.bestStreak >= 10) unlock('streak');
+  if (!anySurv && run.mode === 'lone') run.bloodbath = true;
+  save();
+}
+
+function verdictNext() {
+  const run = S.run;
+  if (!run) return;
+  if (run.vi < run.verdicts.length - 1) {
+    run.vi++;
+    run.t = 0;
+    sfx('move');
+  } else {
+    run.phase = 'standings';
+    run.t = 0;
+    sfx('select');
+  }
+}
+
+function sortedPlayers(run) {
+  return run.players.slice().sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.survives !== a.survives) return b.survives - a.survives;
+    return a.name < b.name ? -1 : 1;
+  });
+}
+
+function continueFromStandings() {
+  const run = S.run;
+  if (!run) return;
+  if (run.round === 3) {
+    const order = sortedPlayers(run);
+    run.trailingAt3 = order[0].id !== run.you.id;
+  }
+  if (run.round >= run.totalRounds) finishRun();
+  else nextRound();
+}
+
+function finishRun() {
+  const run = S.run;
+  if (!run) return;
+  const order = sortedPlayers(run);
+  for (let i = 0; i < order.length; i++) order[i].place = i + 1;
+  const won = order[0].id === run.you.id;
+
+  run.phase = 'final';
+  run.t = 0;
+  run.finalIdx = 0;
+  run.won = won;
+  run.place = run.you.place;
+  run.order = order;
+
+  if (run.you.points > G.stats.best) G.stats.best = run.you.points;
+  if (won) G.stats.wins++;
+
+  if (won) {
+    if (run.mode === 'lone') unlock('lone');
+    if (run.mode === 'judgement') unlock('champ');
+    if (run.trailingAt3) unlock('comeback');
+  }
+  let flawless = true;
+  for (let i = 0; i < run.players.length; i++) if (run.players[i].isYou && run.players[i].deaths > 0) flawless = false;
+  if (flawless && run.round >= 5) unlock('flawless');
+
+  if (run.mode === 'daily') {
+    G.daily.date = dayKey();
+    G.daily.done = true;
+    if (run.you.points > (G.daily.best || 0)) G.daily.best = run.you.points;
+    G.stats.daily++;
+    unlock('daily');
+  }
+
+  G.history.unshift({
+    d: dayKey(),
+    mode: run.mode,
+    score: run.you.points,
+    place: run.you.place,
+    won: won
+  });
+  if (G.history.length > 8) G.history = G.history.slice(0, 8);
+
+  save();
+  if (won) sfx('win'); else sfx('death');
+}
+
+function replayRun() {
+  if (!S.run) { S.screen = 'menu'; return; }
+  startRun(S.run.mode, S.run.pack);
+}
+
+function menuSelect() {
+  const item = MENU[S.menu];
+  if (!item) return;
+  sfx('select');
+  if (item.id === 'judgement' || item.id === 'lone' || item.id === 'daily') {
+    S.pendingMode = item.id;
+    S.pack = 0;
+    S.screen = 'avatar';
+    S.t = 0;
+  } else if (item.id === 'custom') {
+    S.screen = 'pack';
+    S.t = 0;
+    S.pack = 0;
+  } else if (item.id === 'help') {
+    S.screen = 'help';
+    S.t = 0;
+    S.help = 0;
+  } else if (item.id === 'stats') {
+    S.screen = 'stats';
+    S.t = 0;
+    S.statsIdx = 0;
+  } else if (item.id === 'settings') {
+    S.screen = 'settings';
+    S.t = 0;
+    S.setIdx = 0;
+  } else if (item.id === 'about') {
+    S.screen = 'about';
+    S.t = 0;
+    S.aboutIdx = 0;
+  }
+}
+
+function startPendingRun() {
+  const mode = S.pendingMode || 'judgement';
+  const pack = mode === 'custom' ? PACKS[S.pack].id : 'all';
+  startRun(mode, pack);
+}
+
+/* =========================================================================
+   SHARED DRAWING
+   ========================================================================= */
+let GT = 0;
+const ASH = [];
+for (let i = 0; i < 46; i++) {
+  ASH.push({ x: (i * 137.5) % W, y: (i * 71.3) % H, s: 0.4 + ((i * 13) % 10) / 10, v: 3 + (i % 7) });
+}
+
+function spaced(s, x, y, size, color, sp, align, weight) {
+  ctx.font = (weight || '700') + ' ' + size + 'px ' + MONO;
+  let total = 0;
+  for (let i = 0; i < s.length; i++) total += ctx.measureText(s[i]).width + sp;
+  total -= sp;
+  let cx = align === 'center' ? x - total / 2 : (align === 'right' ? x - total : x);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.fillText('', 0, 0);
+  for (let i = 0; i < s.length; i++) {
+    ctx.fillText(s[i], cx, y);
+    cx += ctx.measureText(s[i]).width + sp;
+  }
+}
+
+function drawBG() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0b0d14');
+  g.addColorStop(0.55, '#08090c');
+  g.addColorStop(1, '#0a0708');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // drifting ash
+  ctx.fillStyle = 'rgba(220,215,200,0.10)';
+  for (let i = 0; i < ASH.length; i++) {
+    const a = ASH[i];
+    const y = (a.y + GT * a.v) % (H + 10) - 5;
+    const x = a.x + Math.sin(GT * 0.5 + i) * 4;
+    ctx.fillRect(x, y, a.s, a.s);
+  }
+
+  // faint floor grid
+  ctx.strokeStyle = 'rgba(90,100,125,0.055)';
+  ctx.lineWidth = 1;
+  const off = (GT * 6) % 14;
+  for (let y = 40 + off; y < H; y += 14) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+}
+
+function chrome(title, right) {
+  ctx.fillStyle = '#0a0c12';
+  ctx.fillRect(0, 0, W, 19);
+  hline(0, W, 19, C.line, 0.9);
+  txt(title, 8, 6, 6, C.dim, 'left', '700');
+  if (right) {
+    const sz = fitText(right, 120, 6, '700', 4.5);
+    txt(right, W - 8, 6, sz, C.faint, 'right', '700');
+  }
+}
+
+function hint(s) {
+  ctx.fillStyle = '#0a0c12';
+  ctx.fillRect(0, H - 17, W, 17);
+  hline(0, W, H - 17, C.line, 0.9);
+  const sz = fitText(s, W - 16, 6, '700', 4.4);
+  txt(s, W / 2, H - 12, sz, C.faint, 'center', '700');
+}
+
+function blink(a, b) {
+  return (Math.sin(GT * 5.2) * 0.5 + 0.5) > 0.45 ? a : b;
+}
+
+function sigil(idx, cx, cy, r, alpha, dead) {
+  const av = AVATARS[idx % AVATARS.length];
+  const col = dead ? '#4a4f5e' : av.c;
+  ctx.save();
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.strokeStyle = col;
+  ctx.fillStyle = col;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha *= 0.22;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 2.6, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  const p = av.p;
+  const u = r * 0.52;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  if (p === 0) {
+    ctx.moveTo(cx - u, cy - u * 0.5); ctx.lineTo(cx - u, cy + u * 0.4);
+    ctx.moveTo(cx + u, cy - u * 0.5); ctx.lineTo(cx + u, cy + u * 0.4);
+    ctx.moveTo(cx - u * 0.7, cy + u * 0.8); ctx.quadraticCurveTo(cx, cy + u * 1.2, cx + u * 0.7, cy + u * 0.8);
+  } else if (p === 1) {
+    ctx.moveTo(cx, cy - u); ctx.lineTo(cx - u, cy + u * 0.1); ctx.lineTo(cx, cy + u * 0.35); ctx.closePath();
+    ctx.moveTo(cx, cy - u); ctx.lineTo(cx + u, cy + u * 0.1); ctx.lineTo(cx, cy + u * 0.35); ctx.closePath();
+  } else if (p === 2) {
+    ctx.arc(cx, cy, u * 0.35, 0, Math.PI * 2);
+    ctx.moveTo(cx + u, cy); ctx.arc(cx, cy, u, 0, Math.PI * 2);
+  } else if (p === 3) {
+    ctx.moveTo(cx, cy + u); ctx.quadraticCurveTo(cx - u, cy, cx, cy - u);
+    ctx.quadraticCurveTo(cx + u, cy, cx, cy + u);
+  } else if (p === 4) {
+    ctx.moveTo(cx - u * 0.2, cy - u); ctx.lineTo(cx + u * 0.5, cy - u * 0.1);
+    ctx.lineTo(cx + u * 0.05, cy - u * 0.1); ctx.lineTo(cx + u * 0.3, cy + u);
+    ctx.lineTo(cx - u * 0.5, cy - u * 0.05); ctx.lineTo(cx - u * 0.05, cy - u * 0.05);
+    ctx.closePath();
+  } else if (p === 5) {
+    ctx.moveTo(cx - u, cy - u); ctx.lineTo(cx + u, cy + u);
+    ctx.moveTo(cx + u, cy - u); ctx.lineTo(cx - u, cy + u);
+  } else if (p === 6) {
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 3;
+      const x = cx + Math.cos(a) * u, y = cy + Math.sin(a) * u;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  } else {
+    ctx.moveTo(cx - u, cy - u * 0.3);
+    ctx.quadraticCurveTo(cx - u * 0.4, cy - u, cx, cy - u * 0.3);
+    ctx.quadraticCurveTo(cx + u * 0.4, cy + u * 0.4, cx + u, cy - u * 0.3);
+  }
+  if (p === 1 || p === 2 || p === 3 || p === 4 || p === 6) ctx.fill(); else ctx.stroke();
+  ctx.restore();
+}
+
+function roundPips(cx, y, round, total, bonus) {
+  const gap = 11;
+  const startX = cx - (total - 1) * gap / 2;
+  for (let i = 0; i < total; i++) {
+    const done = i < round - 1;
+    const cur = i === round - 1;
+    ctx.beginPath();
+    ctx.arc(startX + i * gap, y, cur ? 2.6 : 2, 0, Math.PI * 2);
+    if (cur) { ctx.fillStyle = bonus ? C.gold : C.orange; ctx.fill(); }
+    else if (done) { ctx.fillStyle = C.faint; ctx.fill(); }
+    else { ctx.strokeStyle = C.faint; ctx.lineWidth = 1; ctx.stroke(); }
+  }
+}
+
+/* =========================================================================
+   SCREENS - TITLE / MENU / SETUP
+   ========================================================================= */
+const AV_FLAVOR = [
+  'Keeps score. Holds grudges.',
+  'Drawn to the light. Eats it.',
+  'Stares back. Always.',
+  'Burns out. Never fades.',
+  'Cannot hear you over itself.',
+  'Nothing left to lose.',
+  'Bad luck, professionally.',
+  'Goes with the current.'
+];
+
+function drawTitle() {
+  const pulse = 1 + Math.sin(GT * 1.6) * 0.03;
+  ctx.save();
+  ctx.translate(W / 2, 56);
+  ctx.scale(pulse, pulse);
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = C.orange;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(0, 0, 34 + Math.sin(GT * 2) * 2, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
+  sigil(0, 0, 0, 21, 1);
+  ctx.restore();
+
+  spaced('JUDGEMENT', W / 2, 86, 22, C.ink, 0.6, 'center');
+  spaced('BY AI', W / 2, 112, 22, C.orange, 0.6, 'center');
+
+  hline(48, W - 48, 144, C.line, 1);
+  txt('FIVE ROUNDS. ONE JUDGE.', W / 2, 151, 6, C.dim, 'center', '700');
+  txt('EVERY ANSWER IS A LAST WORD.', W / 2, 161, 6, C.dim, 'center', '700');
+
+  const a = blink(1, 0.35);
+  ctx.globalAlpha = a;
+  txt('PRESS SIDE TO BEGIN', W / 2, 186, 8, C.ink, 'center', '700');
+  ctx.globalAlpha = 1;
+
+  const best = G.stats.best || 0;
+  txt('BEST ' + best + '   RUNS ' + G.stats.runs + '   TROPHIES ' + Object.keys(G.ach).length + '/12', W / 2, 206, 5.4, C.faint, 'center', '700');
+
+  hline(30, W - 30, 222, C.line, 0.7);
+  txt('CREATED BY JEFF H.', W / 2, 230, 6, C.dim, 'center', '700');
+  txt('MR. GHOST / GHOSTLEGACYX', W / 2, 240, 6, C.orange, 'center', '700');
+  txt('v1.0  -  BUILT FOR RABBIT R1', W / 2, 254, 5, C.faint, 'center', '400');
+
+  if (G.daily.date === dayKey() && G.daily.done) {
+    tag('DAILY CLEARED', W - 10 - 52, 6, 'rgba(93,242,160,.15)', C.green, 5);
+  }
+}
+
+function drawMenu() {
+  chrome('MAIN MENU', 'BEST ' + (G.stats.best || 0));
+  const perPage = 6;
+  let start = clamp(S.menu - 2, 0, Math.max(0, MENU.length - perPage));
+  for (let i = 0; i < perPage && start + i < MENU.length; i++) {
+    const idx = start + i;
+    const it = MENU[idx];
+    const y = 27 + i * 26;
+    const sel = idx === S.menu;
+    if (sel) {
+      panel(6, y, W - 12, 24, 'rgba(255,90,43,0.10)', 'rgba(255,90,43,0.55)', 3);
+      ctx.fillStyle = C.orange;
+      ctx.fillRect(6, y + 2, 2.5, 20);
+    }
+    txt(it.label, 14, y + 3, 9.5, sel ? C.ink : C.dim, 'left', '700');
+    txt(it.sub, 14, y + 14, 5.6, sel ? C.dim : C.faint, 'left', '400');
+    txt(pad2(idx + 1), W - 12, y + 4, 5.5, sel ? C.orange : C.faint, 'right', '700');
+    if (it.id === 'daily' && G.daily.date === dayKey() && G.daily.done) {
+      tag('CLEARED', W - 44, y + 13, 'rgba(93,242,160,.14)', C.green, 4.6);
+    }
+  }
+
+  const y0 = 27 + perPage * 26 + 4;
+  panel(6, y0, W - 12, 40, 'rgba(255,255,255,0.025)', C.line, 3);
+  txt('YOUR RECORD', 12, y0 + 5, 5.4, C.faint, 'left', '700');
+  txt('WINS ' + G.stats.wins + '   RUNS ' + G.stats.runs + '   ROUNDS ' + G.stats.rounds, 12, y0 + 14, 5.4, C.dim, 'left', '700');
+  txt('BEST STREAK ' + G.stats.bestStreak + '   TROPHIES ' + Object.keys(G.ach).length + '/12', 12, y0 + 24, 5.4, C.dim, 'left', '700');
+
+  hint('WHEEL: MOVE    SIDE: SELECT');
+}
+
+function drawPack() {
+  chrome('SCENARIO PACKS', 'CUSTOM');
+  const perPage = 5;
+  let start = clamp(S.pack - 2, 0, Math.max(0, PACKS.length - perPage));
+  for (let i = 0; i < perPage && start + i < PACKS.length; i++) {
+    const idx = start + i;
+    const p = PACKS[idx];
+    const y = 27 + i * 26;
+    const sel = idx === S.pack;
+    const count = p.id === 'all' ? SCEN.length : packPool(p.id).length;
+    if (sel) {
+      panel(6, y, W - 12, 24, 'rgba(91,200,255,0.08)', 'rgba(91,200,255,0.5)', 3);
+      ctx.fillStyle = C.blue;
+      ctx.fillRect(6, y + 2, 2.5, 20);
+    }
+    txt(p.name, 14, y + 3, 9, sel ? C.ink : C.dim, 'left', '700');
+    txt(count + ' PROMPTS', 14, y + 14, 5.4, sel ? C.blue : C.faint, 'left', '700');
+  }
+  const p = PACKS[S.pack];
+  const y0 = 164;
+  panel(6, y0, W - 12, 70, 'rgba(255,255,255,0.025)', C.line, 3);
+  txt('PACK BRIEF', 12, y0 + 6, 5.4, C.faint, 'left', '700');
+  para(p.desc, 12, y0 + 16, W - 24, 7.5, C.ink, 10, '400', 4);
+  txt('SCENARIOS ARE DRAWN WITHOUT REPEATS.', 12, y0 + 57, 5, C.faint, 'left', '400');
+  hint('WHEEL: MOVE    SIDE: CHOOSE');
+}
+
+function drawAvatar() {
+  chrome('CHOOSE YOUR SIGIL', '4 CONTESTANTS');
+  const cw = 54, ch = 60, gx = 6, gy = 27;
+  for (let i = 0; i < AVATARS.length; i++) {
+    const col = i % 4, row = Math.floor(i / 4);
+    const x = gx + col * (cw + 3);
+    const y = gy + row * (ch + 5);
+    const sel = i === S.avatar;
+    panel(x, y, cw, ch, sel ? 'rgba(255,90,43,0.10)' : 'rgba(255,255,255,0.02)', sel ? C.orange : C.line, 3);
+    sigil(i, x + cw / 2, y + 24, 14, sel ? 1 : 0.55);
+    const nm = AVATARS[i].name;
+    txt(nm, x + cw / 2, y + 44, 5.4, sel ? C.ink : C.dim, 'center', '700');
+    if (i === G.avatar) txt('LAST', x + cw / 2, y + 51, 4.2, C.faint, 'center', '400');
+  }
+  const av = AVATARS[S.avatar];
+  txt(av.name, 8, 168, 13, av.c, 'left', '700');
+  para(AV_FLAVOR[S.avatar % AV_FLAVOR.length], 8, 184, W - 16, 7, C.dim, 9, '400', 2);
+  panel(6, 208, W - 12, 34, 'rgba(255,255,255,0.025)', C.line, 3);
+  txt('RIVALS', 12, 213, 5, C.faint, 'left', '700');
+  txt('VEX  /  MOTH  /  PIP  and friends', 12, 222, 6, C.dim, 'left', '700');
+  txt('They are also trying to impress the AI.', 12, 232, 5.4, C.faint, 'left', '400');
+  hint('WHEEL: MOVE    SIDE: CONFIRM');
+}
+
+const MODE_LABEL = { judgement: 'JUDGEMENT DAY', lone: 'LONE SURVIVOR', daily: 'DAILY DOOM', custom: 'CUSTOM RUN' };
+const MODE_DESC = {
+  judgement: 'Everyone tries to impress the AI. Most points after five rounds takes it.',
+  lone: 'The AI spares exactly one contestant per round. Everyone else dies.',
+  daily: 'A fixed set of five scenarios. Same for every player, every day.',
+  custom: 'A hand-picked pack of scenarios. Same rules, different nightmares.'
+};
+
+function modRows() {
+  return [
+    { id: 'difficulty', label: 'DIFFICULTY', val: ['FORGIVING', 'STANDARD', 'MERCILESS'][G.settings.difficulty] },
+    { id: 'bonus', label: 'BONUS ROUNDS', val: G.settings.bonus ? 'ON  (R3 x2, R5 x3)' : 'OFF' },
+    { id: 'narrator', label: 'AI NARRATOR', val: G.settings.narrator ? 'ON' : 'OFF' },
+    { id: 'begin', label: 'BEGIN JUDGEMENT', val: 'SIDE' }
+  ];
+}
+
+function drawMods() {
+  const mode = S.pendingMode || 'judgement';
+  chrome(MODE_LABEL[mode], mode === 'daily' ? dayKey() : 'SETUP');
+  para(MODE_DESC[mode], 8, 25, W - 16, 6.6, C.dim, 8.6, '400', 3);
+
+  const rows = modRows();
+  for (let i = 0; i < rows.length; i++) {
+    const y = 66 + i * 28;
+    const sel = i === S.mod;
+    const row = rows[i];
+    if (sel) {
+      panel(6, y, W - 12, 24, row.id === 'begin' ? 'rgba(93,242,160,0.10)' : 'rgba(255,90,43,0.09)',
+        row.id === 'begin' ? C.green : 'rgba(255,90,43,0.55)', 3);
+    }
+    txt(row.label, 12, y + 4, 7.6, sel ? C.ink : C.dim, 'left', '700');
+    txt(row.val, W - 12, y + 12, 5.6, sel ? (row.id === 'begin' ? C.green : C.orange) : C.faint, 'right', '700');
+  }
+
+  const d = G.settings.difficulty;
+  const th = THRESH[d];
+  const dd = [
+    'The AI is in a good mood. Pass mark ' + th + '.',
+    'The AI is fair. Pass mark ' + th + '.',
+    'The AI hates you. Pass mark ' + th + '.'
+  ][d];
+  panel(6, 186, W - 12, 66, 'rgba(255,255,255,0.025)', C.line, 3);
+  txt('THE JUDGE', 12, 191, 5.2, C.faint, 'left', '700');
+  para(dd, 12, 200, W - 24, 6.6, C.ink, 8.6, '400', 2);
+  txt('BONUS ROUNDS MULTIPLY POINTS.', 12, 222, 5, C.faint, 'left', '400');
+  txt('THE AI DOES NOT NEGOTIATE.', 12, 230, 5, C.faint, 'left', '400');
+  txt('FORBIDDEN: SURVIVE / WIN / SAFE / ALIVE', 12, 239, 4.8, C.red, 'left', '700');
+  hint('WHEEL: MOVE    SIDE: CHANGE / START');
+}
+
+function drawHelp() {
+  chrome('HOW TO PLAY', 'PAGE ' + (S.help + 1) + '/3');
+  const y = 26;
+  if (S.help === 0) {
+    txt('THE LOOP', 8, y, 10, C.orange, 'left', '700');
+    para('Five rounds. Each round the AI drops you into a deadly scenario. You get 60 seconds to explain, out loud, how you get out of it.', 8, y + 16, W - 16, 7.4, C.ink, 10, '400');
+    para('The AI reads your answer and decides whether you live or die. Surviving earns points. The most points after five rounds wins.', 8, y + 64, W - 16, 7.4, C.ink, 10, '400');
+    para('Your three rivals are judged by the same AI. They will gloat.', 8, y + 112, W - 16, 7.4, C.dim, 10, '400');
+    txt('NOBODY GETS A SECOND CHANCE.', 8, y + 146, 6.4, C.faint, 'left', '700');
+  } else if (S.help === 1) {
+    txt('CONTROLS', 8, y, 10, C.orange, 'left', '700');
+    const items = [
+      ['WHEEL', 'Move through menus and options.'],
+      ['SIDE TAP', 'Select, confirm, continue.'],
+      ['HOLD SIDE', 'Push-to-talk. Speak your answer.'],
+      ['RELEASE', 'Stop recording. Review it.'],
+      ['SIDE TAP', 'Submit the answer to the AI.']
+    ];
+    let yy = y + 18;
+    for (let i = 0; i < items.length; i++) {
+      tag(items[i][0], 8, yy, 'rgba(91,200,255,0.12)', C.blue, 5);
+      txt(items[i][1], 8, yy + 11, 6.4, C.ink, 'left', '400');
+      yy += 26;
+    }
+    para('If speech is unavailable, the FORGE builds an answer from parts. It is not cheating. It is survival.', 8, yy + 2, W - 16, 6.4, C.dim, 8.4, '400', 3);
+  } else {
+    txt('THE FINE PRINT', 8, y, 10, C.red, 'left', '700');
+    para('These words are forbidden in every answer:', 8, y + 17, W - 16, 7.2, C.ink, 9.6, '400');
+    const banned = ['SURVIVE', 'WIN', 'SAFE', 'SAFETY', 'ALIVE'];
+    for (let i = 0; i < banned.length; i++) {
+      const w = measure(banned[i], 7, '700') + 10;
+      tag(banned[i], 8 + (i % 3) * 74, y + 30 + Math.floor(i / 3) * 18, 'rgba(255,45,85,0.12)', C.red, 6);
+    }
+    para('Say one and you die, no matter how good the plan was. The AI checks. The AI always checks.', 8, y + 70, W - 16, 7.2, C.ink, 9.8, '400');
+    para('Cheese works: dreams, wake-ups, plot armor. It also gets stale. Repeat it and the AI notices.', 8, y + 104, W - 16, 7.2, C.dim, 9.8, '400');
+    para('Bonus rounds: round 3 is worth x2, round 5 is worth x3.', 8, y + 148, W - 16, 7.2, C.gold, 9.8, '400');
+  }
+  txt('WHEEL: PAGE    SIDE: BACK', W / 2, H - 30, 5.2, C.faint, 'center', '700');
+  hint('SIDE: BACK TO MENU');
+}
+
+function drawSettings() {
+  chrome('SETTINGS', 'SAVED');
+  for (let i = 0; i < SETTINGS_ROWS.length; i++) {
+    const row = SETTINGS_ROWS[i];
+    const y = 27 + i * 28;
+    const sel = i === S.setIdx;
+    if (sel) {
+      panel(6, y, W - 12, 24, i === 5 ? 'rgba(255,45,85,0.10)' : 'rgba(255,90,43,0.09)',
+        i === 5 ? 'rgba(255,45,85,0.6)' : 'rgba(255,90,43,0.5)', 3);
+    }
+    txt(row.label, 12, y + 4, 7.2, sel ? C.ink : C.dim, 'left', '700');
+    let v = row.vals[0];
+    if (row.k === 'sound') v = G.settings.sound ? 'ON' : 'OFF';
+    else if (row.k === 'narrator') v = G.settings.narrator ? 'ON' : 'OFF';
+    else if (row.k === 'fx') v = G.settings.fx ? 'ON' : 'OFF';
+    else if (row.k === 'difficulty') v = row.vals[G.settings.difficulty];
+    else if (row.k === 'bonus') v = G.settings.bonus ? 'ON' : 'OFF';
+    else if (row.k === 'erase') v = S.eraseArmed ? 'TAP AGAIN' : 'HOLD...';
+    txt(v, W - 12, y + 12, 5.6, sel ? (i === 5 ? C.red : C.orange) : C.faint, 'right', '700');
+  }
+  const notes = [
+    'All sound is generated on the device.',
+    'Adds a narrator line between rounds.',
+    'Scanlines and vignette. Very serious.',
+    'Raise the pass mark if you enjoy pain.',
+    'Round 3 pays x2. Round 5 pays x3.',
+    'Clears stats, trophies and daily record.'
+  ];
+  panel(6, 198, W - 12, 50, 'rgba(255,255,255,0.025)', C.line, 3);
+  txt('NOTE', 12, 203, 5, C.faint, 'left', '700');
+  para(notes[S.setIdx], 12, 212, W - 24, 6.4, C.ink, 8.4, '400', 3);
+  hint('WHEEL: MOVE    SIDE: CHANGE');
+}
+
+function drawStats() {
+  const pages = 2;
+  chrome('STATS & TROPHIES', 'PAGE ' + (S.statsIdx + 1) + '/' + pages);
+  if (S.statsIdx === 0) {
+    const tiles = [
+      ['RUNS', G.stats.runs, C.ink],
+      ['WINS', G.stats.wins, C.gold],
+      ['BEST SCORE', G.stats.best, C.orange],
+      ['BEST STREAK', G.stats.bestStreak, C.green]
+    ];
+    for (let i = 0; i < 4; i++) {
+      const col = i % 2, row = Math.floor(i / 2);
+      const x = 6 + col * 116, y = 26 + row * 40;
+      panel(x, y, 112, 36, 'rgba(255,255,255,0.025)', C.line, 3);
+      txt(tiles[i][0], x + 7, y + 5, 5.2, C.faint, 'left', '700');
+      txt(String(tiles[i][1]), x + 7, y + 14, 15, tiles[i][2], 'left', '700');
+    }
+    txt('RECENT RUNS', 8, 114, 6, C.dim, 'left', '700');
+    if (!G.history.length) {
+      txt('No runs yet. The AI is waiting.', 8, 128, 6.4, C.faint, 'left', '400');
+    } else {
+      for (let i = 0; i < Math.min(5, G.history.length); i++) {
+        const h = G.history[i];
+        const y = 126 + i * 20;
+        const mode = (MODE_LABEL[h.mode] || h.mode).replace('JUDGEMENT DAY', 'J-DAY').replace('LONE SURVIVOR', 'LONE');
+        const col = h.won ? C.gold : C.dim;
+        txt(mode, 8, y, 5.8, col, 'left', '700');
+        txt('#' + h.place, 122, y, 5.8, h.won ? C.gold : C.faint, 'right', '700');
+        txt(String(h.score), 200, y, 5.8, C.ink, 'right', '700');
+        txt(h.d, W - 8, y, 4.6, C.faint, 'right', '400');
+      }
+    }
+    txt('WHEEL: SWITCH PAGE', W / 2, 246, 5.2, C.faint, 'center', '700');
+  } else {
+    txt('TROPHIES  ' + Object.keys(G.ach).length + '/12', 8, 26, 8, C.gold, 'left', '700');
+    for (let i = 0; i < ACH.length; i++) {
+      const a = ACH[i];
+      const col = i % 2, row = Math.floor(i / 2);
+      const x = 6 + col * 116, y = 40 + row * 33;
+      const got = !!G.ach[a.id];
+      panel(x, y, 112, 29, got ? 'rgba(255,200,87,0.08)' : 'rgba(255,255,255,0.015)', got ? 'rgba(255,200,87,0.4)' : C.line, 3);
+      txt(got ? 'X' : '?', x + 6, y + 4, 7, got ? C.gold : C.faint, 'left', '700');
+      const nm = fitText(a.n, 92, 5.4, '700', 4);
+      txt(nm, x + 16, y + 4, 5.4, got ? C.ink : C.faint, 'left', '700');
+      para(a.d, x + 16, y + 13, 92, 4.6, got ? C.dim : C.faint, 5.6, '400', 2);
+    }
+    txt('WHEEL: SWITCH PAGE', W / 2, 246, 5.2, C.faint, 'center', '700');
+  }
+  hint('SIDE: BACK TO MENU');
+}
+
+function drawAbout() {
+  chrome('CREDITS', 'v1.0');
+  sigil(0, W / 2, 48, 16, 1);
+  txt('JUDGEMENT BY AI', W / 2, 72, 10, C.ink, 'center', '700');
+  txt('A party game where the judge is a machine', W / 2, 86, 5.4, C.dim, 'center', '400');
+
+  panel(6, 100, W - 12, 92, 'rgba(255,255,255,0.025)', C.line, 3);
+  txt('CREATED BY', 12, 106, 5, C.faint, 'left', '700');
+  txt('JEFF H.', 12, 115, 9, C.orange, 'left', '700');
+  txt('MR. GHOST / GHOSTLEGACYX', 12, 127, 5.8, C.ink, 'left', '700');
+  hline(12, W - 12, 139, C.line, 0.8);
+  txt('Built for Rabbit R1', 12, 145, 6, C.dim, 'left', '400');
+  txt('Inspired by Death by AI', 12, 155, 6, C.dim, 'left', '400');
+  txt('No AI models were harmed.', 12, 165, 6, C.faint, 'left', '400');
+  txt('Single file. No network. No mercy.', 12, 175, 6, C.faint, 'left', '400');
+
+  txt('The AI judge is local and rule-based.', 8, 202, 6, C.dim, 'left', '400');
+  txt('It reads your words, not your soul.', 8, 212, 6, C.dim, 'left', '400');
+  txt('That is probably worse.', 8, 222, 6, C.orange, 'left', '700');
+  hint('SIDE: BACK TO MENU');
+}
+
+/* =========================================================================
+   PLAY - shared
+   ========================================================================= */
+function modeShort(mode) {
+  return mode === 'judgement' ? 'J-DAY' : (mode === 'lone' ? 'LONE' : (mode === 'daily' ? 'DAILY' : 'CUSTOM'));
+}
+
+function playHeader() {
+  const run = S.run;
+  ctx.fillStyle = '#0a0c12';
+  ctx.fillRect(0, 0, W, 19);
+  hline(0, W, 19, C.line, 0.9);
+  txt('R' + run.round + '/' + run.totalRounds, 7, 6, 6, C.dim, 'left', '700');
+  roundPips(W / 2, 9.5, run.round, run.totalRounds, run.bonus);
+  if (run.bonus) {
+    tag('x' + run.mult, W - 8 - 20, 4, 'rgba(255,200,87,0.16)', C.gold, 5.4);
+  } else {
+    txt(modeShort(run.mode), W - 7, 6, 5.4, C.faint, 'right', '700');
+  }
+}
+
+function bannedIn(text) {
+  const low = ' ' + String(text || '').toLowerCase() + ' ';
+  for (let i = 0; i < BANNED.length; i++) if (BANNED[i].re.test(low)) return BANNED[i].w;
+  return null;
+}
+
+function drawWrappedTail(text, x, y, w, size, lh, color, maxLines, weight) {
+  const lines = wrap(text, w, size, weight || '400');
+  const start = Math.max(0, lines.length - maxLines);
+  for (let i = start; i < lines.length; i++) {
+    txt(lines[i], x, y + (i - start) * lh, size, color, 'left', weight || '400');
+  }
+  return lines.length - start;
+}
+
+function meter(x, y, w, h) {
+  const n = 22;
+  const bw = w / n;
+  const lvl = S.run && S.run.listening ? Math.max(0.06, Voice.level) : 0;
+  for (let i = 0; i < n; i++) {
+    const wave = Math.abs(Math.sin(GT * 7 + i * 0.9)) * 0.45 + Math.abs(Math.sin(GT * 3.1 + i * 0.31)) * 0.55;
+    const bh = 1 + wave * (h - 1) * lvl;
+    const col = lvl > 0.02 ? (i > n * 0.72 ? C.orange : C.green) : C.line;
+    ctx.fillStyle = col;
+    ctx.fillRect(x + i * bw, y + (h - bh) / 2, Math.max(1, bw - 1), bh);
+  }
+}
+
+/* =========================================================================
+   PLAY - intro
+   ========================================================================= */
+function drawIntro() {
+  const run = S.run, sc = run.scenario;
+  playHeader();
+  txt('THE AI HAS A SCENARIO', 8, 26, 5.2, C.faint, 'left', '700');
+
+  panel(6, 35, W - 12, 94, 'rgba(255,255,255,0.028)', C.line, 3);
+  txt('"', 10, 38, 20, C.orange, 'left', '700');
+  const ch = Math.floor(run.t * 46);
+  const shown = sc.t.slice(0, ch);
+  para(shown, 13, 50, W - 26, 9, C.ink, 11.6, '700', 6);
+  if (ch < sc.t.length) {
+    ctx.fillStyle = C.orange;
+    const h = 9;
+    const lx = 13 + Math.min(1, (ch % 20) / 20) * 4;
+    ctx.fillRect(lx, 140, 4, 1.5);
+  }
+
+  const narr = run.narration;
+  if (narr) {
+    const nt = Math.min(narr.length, Math.floor(run.t * 55));
+    para(narr.slice(0, nt), 8, 138, W - 16, 6.4, C.dim, 8.2, '400', 3);
+  }
+
+  if (run.bonus) {
+    panel(6, 162, W - 12, 22, 'rgba(255,200,87,0.10)', 'rgba(255,200,87,0.4)', 3);
+    txt('BONUS ROUND', 12, 167, 6, C.gold, 'left', '700');
+    txt('POINTS x' + run.mult, W - 12, 167, 6, C.gold, 'right', '700');
+  }
+
+  txt('60 SECONDS. ONE ANSWER.', W / 2, 200, 6.2, C.dim, 'center', '700');
+  txt('MAKE IT COUNT.', W / 2, 209, 5.4, C.faint, 'center', '400');
+
+  ctx.globalAlpha = blink(1, 0.3);
+  txt('SIDE: FACE IT', W / 2, 226, 9, C.orange, 'center', '700');
+  ctx.globalAlpha = 1;
+
+  hint('SIDE: BEGIN THE ROUND');
+}
+
+/* =========================================================================
+   PLAY - answer
+   ========================================================================= */
+function drawAnswer() {
+  const run = S.run, sc = run.scenario;
+  playHeader();
+
+  panel(6, 24, W - 12, 56, 'rgba(255,255,255,0.025)', C.line, 3);
+  para(sc.t, 11, 29, W - 22, 6.3, C.dim, 7.8, '400', 4);
+
+  // timer
+  const frac = clamp(run.timeLeft / 60, 0, 1);
+  const tcol = frac > 0.5 ? C.green : (frac > 0.22 ? C.gold : C.red);
+  txt('TIME', 8, 87, 5, C.faint, 'left', '700');
+  const secs = Math.max(0, Math.ceil(run.timeLeft));
+  txt('0:' + pad2(secs), W - 8, 84, 8, tcol, 'right', '700');
+  panel(30, 89, W - 38, 5, '#141821', null, 2);
+  if (frac > 0.001) {
+    panel(30, 89, Math.max(2, (W - 38) * frac), 5, tcol, null, 2);
+  }
+
+  // answer box
+  panel(6, 101, W - 12, 96, 'rgba(255,255,255,0.03)', run.listening ? 'rgba(255,90,43,0.6)' : C.line, 3);
+  txt('YOUR ANSWER', 11, 105, 5, C.faint, 'left', '700');
+  txt(String(answerComposed(run).length) + ' CH', W - 11, 105, 4.6, C.faint, 'right', '400');
+
+  const composed = answerComposed(run);
+  if (composed) {
+    drawWrappedTail(composed, 11, 114, W - 22, 7.2, 9.4, C.ink, 8, '400');
+  } else if (run.listening) {
+    ctx.globalAlpha = blink(1, 0.4);
+    txt(run.voiceInterim || 'LISTENING...', 11, 116, 7.2, C.orange, 'left', '700');
+    ctx.globalAlpha = 1;
+  } else {
+    txt('HOLD SIDE AND SPEAK.', 11, 118, 7.2, C.dim, 'left', '700');
+    txt('Or tap SIDE to build one.', 11, 130, 5.6, C.faint, 'left', '400');
+  }
+  meter(11, 181, W - 22, 12);
+
+  // status
+  const bn = bannedIn(composed);
+  if (run.listening) {
+    ctx.fillStyle = C.red;
+    ctx.beginPath(); ctx.arc(10, 208, 2.2, 0, Math.PI * 2); ctx.fill();
+    txt('RECORDING - RELEASE TO STOP', 17, 204, 6, C.red, 'left', '700');
+  } else if (bn) {
+    txt('FORBIDDEN WORD: ' + bn.toUpperCase(), 9, 204, 6.4, C.red, 'left', '700');
+    txt('The AI will kill you for it.', 9, 213, 5.2, C.faint, 'left', '400');
+  } else if (composed) {
+    txt('SIDE: REVIEW    HOLD: KEEP TALKING', 9, 204, 5.6, C.green, 'left', '700');
+    txt('Tap SIDE when you are done.', 9, 213, 5.2, C.faint, 'left', '400');
+  } else {
+    txt('HOLD SIDE: SPEAK', 9, 204, 6, C.orange, 'left', '700');
+    txt('TAP SIDE: PHRASE FORGE', 9, 213, 5.2, C.faint, 'left', '400');
+  }
+
+  txt('FORBIDDEN: SURVIVE / WIN / SAFE / SAFETY / ALIVE', W / 2, 235, 4.8, C.faint, 'center', '700');
+  txt('THE AI IS LISTENING.', W / 2, 244, 5, C.faint, 'center', '400');
+
+  hint(run.listening ? 'RELEASE SIDE WHEN YOU FINISH' : 'HOLD SIDE: SPEAK    TAP: FORGE');
+}
+
+/* =========================================================================
+   PLAY - confirm
+   ========================================================================= */
+function drawConfirm() {
+  const run = S.run;
+  playHeader();
+  txt('REVIEW YOUR ANSWER', 8, 26, 8, C.ink, 'left', '700');
+  txt('THE AI WILL NOT ASK TWICE.', 8, 37, 5.2, C.faint, 'left', '700');
+
+  panel(6, 47, W - 12, 104, 'rgba(255,255,255,0.03)', C.line, 3);
+  const a = run.answer;
+  drawWrappedTail(a, 11, 53, W - 22, 7.2, 9.6, C.ink, 10, '400');
+
+  const words = wordsOf(a).length;
+  txt(words + ' WORDS', 8, 158, 5.4, C.dim, 'left', '700');
+  txt(a.length + ' CHARS', W - 8, 158, 5.4, C.dim, 'right', '700');
+
+  const bn = bannedIn(a);
+  if (bn) {
+    panel(6, 168, W - 12, 30, 'rgba(255,45,85,0.10)', 'rgba(255,45,85,0.55)', 3);
+    txt('FORBIDDEN WORD: ' + bn.toUpperCase(), 12, 173, 7, C.red, 'left', '700');
+    txt('Hold SIDE to record again.', 12, 184, 5.4, C.dim, 'left', '400');
+  } else {
+    panel(6, 168, W - 12, 30, 'rgba(93,242,160,0.08)', 'rgba(93,242,160,0.35)', 3);
+    txt('NO FORBIDDEN WORDS DETECTED', 12, 173, 6, C.green, 'left', '700');
+    txt('That does not mean it will work.', 12, 184, 5.4, C.faint, 'left', '400');
+  }
+
+  ctx.globalAlpha = blink(1, 0.45);
+  txt('SIDE: SUBMIT TO THE AI', W / 2, 210, 8, C.orange, 'center', '700');
+  ctx.globalAlpha = 1;
+  txt('HOLD SIDE: RECORD AGAIN', W / 2, 226, 5.4, C.faint, 'center', '700');
+
+  if (run.usedForge) txt('BUILT IN THE FORGE', W / 2, 240, 4.6, C.blue, 'center', '700');
+  hint('SIDE: SUBMIT    HOLD: RECORD AGAIN');
+}
+
+/* =========================================================================
+   PLAY - phrase forge
+   ========================================================================= */
+function drawForge() {
+  const run = S.run;
+  const o = forgeOpts(run.scenario);
+  const f = run.forge;
+  playHeader();
+  txt('PHRASE FORGE', 8, 24, 9, C.blue, 'left', '700');
+  txt('NO MIC. STILL DEADLY.', 8, 36, 5.2, C.faint, 'left', '700');
+
+  const labels = ['ACTION', 'TOOL', 'METHOD', 'ESCAPE', 'FLAIR'];
+  const keys = ['open', 'tool', 'act', 'move', 'twist'];
+  for (let i = 0; i < 5; i++) {
+    const y = 50 + i * 27;
+    const sel = i === f.slot;
+    const val = o[keys[i]][f.idx[i] % o[keys[i]].length];
+    if (sel) {
+      panel(6, y, W - 12, 23, 'rgba(91,200,255,0.09)', 'rgba(91,200,255,0.55)', 3);
+      ctx.fillStyle = C.blue;
+      ctx.fillRect(6, y + 2, 2.5, 19);
+    }
+    txt(labels[i], 13, y + 3, 4.8, sel ? C.blue : C.faint, 'left', '700');
+    const sz = fitText(val, W - 26, 7, '400', 4.6);
+    txt(val, 13, y + 11, sz, sel ? C.ink : C.dim, 'left', '400');
+  }
+
+  panel(6, 190, W - 12, 56, 'rgba(255,255,255,0.03)', C.line, 3);
+  txt('PREVIEW', 11, 194, 4.8, C.faint, 'left', '700');
+  para(forgeText(run), 11, 202, W - 22, 6.2, C.ink, 8, '400', 4);
+
+  txt('WHEEL: CHANGE PART   SIDE: NEXT', W / 2, 252, 5.2, C.dim, 'center', '700');
+  hint(f.slot === 4 ? 'SIDE: SUBMIT THE ANSWER' : 'HOLD SIDE: SWITCH TO VOICE');
+}
+
+/* =========================================================================
+   PLAY - judging
+   ========================================================================= */
+const JUDGE_LOG = [
+  'tokenizing excuse', 'cross-checking physics', 'consulting the void', 'measuring bravado',
+  'searching for a plan', 'detecting cheese', 'consulting precedent', 'rolling one die',
+  'ignoring your feelings', 'checking the rulebook', 'asking the other AI', 'loading contempt'
+];
+
+function drawJudging() {
+  const run = S.run;
+  playHeader();
+  const dots = '.'.repeat(1 + Math.floor(run.t * 3) % 3);
+  txt('JUDGING' + dots, W / 2, 34, 15, C.orange, 'center', '700');
+  txt('THE AI IS READING YOUR EXCUSE', W / 2, 54, 5.4, C.faint, 'center', '700');
+
+  const n = Math.min(5, Math.floor(run.t / 0.34));
+  for (let i = 0; i < n; i++) {
+    const li = (i * 5 + Math.floor(run.seed / 7)) % JUDGE_LOG.length;
+    const y = 72 + i * 12;
+    txt('> ' + JUDGE_LOG[li], 10, y, 5.8, i === n - 1 ? C.green : C.dim, 'left', '400');
+  }
+
+  for (let i = 0; i < run.players.length; i++) {
+    const p = run.players[i];
+    const y = 148 + i * 24;
+    const active = Math.floor(run.t * 6) % run.players.length === i;
+    sigil(p.av, 20, y + 6, 7, p.isYou ? 1 : 0.7);
+    txt(p.name, 34, y + 1, 6.6, p.isYou ? C.ink : C.dim, 'left', '700');
+    txt(active ? 'ANALYZING' : 'WAITING', W - 10, y + 1, 5, active ? C.orange : C.faint, 'right', '700');
+    if (active) {
+      const w = (Math.sin(run.t * 10) * 0.5 + 0.5) * 40 + 6;
+      ctx.fillStyle = C.orange;
+      ctx.globalAlpha = 0.6;
+      ctx.fillRect(34, y + 12, w, 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+  hint('SIDE: SKIP ANIMATION');
+}
+
+/* =========================================================================
+   PLAY - verdict
+   ========================================================================= */
+function drawVerdict() {
+  const run = S.run;
+  const p = run.verdicts[run.vi];
+  playHeader();
+  txt('CONTESTANT ' + (run.vi + 1) + ' OF ' + run.verdicts.length, 8, 24, 5.2, C.faint, 'left', '700');
+  txt('VERDICT', W - 8, 23, 6, p.pass ? C.green : C.red, 'right', '700');
+
+  sigil(p.av, 24, 50, 12, 1, !p.pass);
+  const nm = fitText(p.name, 110, 11, '700', 6);
+  txt(nm, 44, 39, 11, p.isYou ? C.ink : C.dim, 'left', '700');
+  txt(p.isYou ? 'YOU' : 'RIVAL CONTESTANT', 44, 55, 4.8, C.faint, 'left', '700');
+  txt('SCORE ' + p.score, 44, 64, 5.2, p.pass ? C.green : C.red, 'left', '700');
+  txt(String(p.points), W - 8, 42, 15, C.gold, 'right', '700');
+  txt('PTS', W - 8, 60, 4.8, C.faint, 'right', '700');
+
+  const bc = p.pass ? C.green : C.red;
+  panel(6, 76, W - 12, 28, p.pass ? 'rgba(93,242,160,0.12)' : 'rgba(255,45,85,0.14)', bc, 3);
+  const label = p.pass ? (run.mode === 'lone' ? 'THE ONE SPARED' : 'SURVIVED') : 'DIED';
+  spaced(label, W / 2, 82, 14, bc, 1.2, 'center', '700');
+
+  panel(6, 110, W - 12, 58, 'rgba(255,255,255,0.03)', C.line, 3);
+  txt('THE ANSWER', 11, 114, 4.6, C.faint, 'left', '700');
+  if (!p.answer) {
+    txt('...nothing. Absolutely nothing.', 11, 124, 6.2, C.red, 'left', '700');
+  } else {
+    para('"' + p.answer + '"', 11, 123, W - 22, 6.2, C.ink, 8, '400', 5);
+  }
+
+  const q = p.quip || '';
+  para(q, 8, 174, W - 16, 7, p.pass ? C.green : C.red, 9, '700', 2);
+
+  let tx = 8;
+  for (let i = 0; i < p.tags.length; i++) {
+    const t = p.tags[i];
+    const col = t.indexOf('FORBIDDEN') === 0 ? C.red : (t === 'CHEESE (WORKS)' ? C.gold : C.dim);
+    const bg = t.indexOf('FORBIDDEN') === 0 ? 'rgba(255,45,85,0.14)' : 'rgba(255,255,255,0.05)';
+    tx += tag(t, tx, 198, bg, col, 4.6) + 4;
+  }
+
+  if (p.pass && p.gained > 0) {
+    ctx.globalAlpha = blink(1, 0.6);
+    txt('+' + p.gained + ' POINTS' + (run.bonus ? '  (x' + run.mult + ')' : ''), W / 2, 214, 8, C.gold, 'center', '700');
+    ctx.globalAlpha = 1;
+  } else {
+    txt(p.pass ? 'NO POINTS AWARDED' : 'YOUR SCORE IS IRRELEVANT NOW', W / 2, 215, 5.6, C.faint, 'center', '700');
+  }
+
+  if (p.isYou) {
+    txt('THAT IS YOU.', W / 2, 232, 5.4, C.orange, 'center', '700');
+  } else {
+    txt(run.mode === 'lone' ? 'ONLY ONE IS SPARED EACH ROUND.' : 'THE AI HAS MOVED ON.', W / 2, 232, 5, C.faint, 'center', '400');
+  }
+
+  hint(run.vi < run.verdicts.length - 1 ? 'SIDE: NEXT VERDICT' : 'SIDE: STANDINGS');
+}
+
+/* =========================================================================
+   PLAY - standings
+   ========================================================================= */
+function drawStandings() {
+  const run = S.run;
+  const order = sortedPlayers(run);
+  playHeader();
+  txt('STANDINGS', 8, 25, 10, C.ink, 'left', '700');
+  txt('AFTER ROUND ' + run.round, W - 8, 28, 5.4, C.faint, 'right', '700');
+
+  hline(8, W - 8, 42, C.line, 0.9);
+  txt('#', 10, 46, 4.6, C.faint, 'left', '700');
+  txt('CONTESTANT', 26, 46, 4.6, C.faint, 'left', '700');
+  txt('PTS', W - 10, 46, 4.6, C.faint, 'right', '700');
+
+  for (let i = 0; i < order.length; i++) {
+    const p = order[i];
+    const y = 56 + i * 34;
+    if (p.isYou) panel(6, y - 2, W - 12, 31, 'rgba(255,90,43,0.08)', 'rgba(255,90,43,0.4)', 3);
+    txt(String(i + 1), 12, y + 6, 9, p.isYou ? C.orange : C.dim, 'left', '700');
+    sigil(p.av, 34, y + 11, 9, p.isYou ? 1 : 0.7, p.deaths > 0 && p.survives === 0);
+    const nm = fitText(p.name + (p.isYou ? ' (YOU)' : ''), 92, 7, '700', 5);
+    txt(nm, 48, y + 3, 7, p.isYou ? C.ink : C.dim, 'left', '700');
+    for (let k = 0; k < run.round; k++) {
+      const px = 50 + k * 8;
+      const ok = k < p.survives;
+      ctx.beginPath();
+      ctx.arc(px, y + 18, 1.9, 0, Math.PI * 2);
+      ctx.fillStyle = ok ? C.green : C.line;
+      ctx.fill();
+    }
+    txt(String(p.points), W - 10, y + 4, 10, p.isYou ? C.gold : C.ink, 'right', '700');
+  }
+
+  const y0 = 202;
+  panel(6, y0, W - 12, 34, 'rgba(255,255,255,0.025)', C.line, 3);
+  if (run.bonus) {
+    txt('BONUS ROUND: POINTS x' + run.mult, 12, y0 + 5, 6, C.gold, 'left', '700');
+    txt('Everyone earned at the same rate.', 12, y0 + 16, 5, C.faint, 'left', '400');
+  } else if (run.mode === 'lone') {
+    txt('LONE SURVIVOR: ONE SPARED PER ROUND', 12, y0 + 5, 5.4, C.purple, 'left', '700');
+    txt('Points go to the single best answer.', 12, y0 + 16, 5, C.faint, 'left', '400');
+  } else {
+    txt('NEXT ROUND: ' + Math.min(run.round + 1, run.totalRounds) + ' OF ' + run.totalRounds, 12, y0 + 5, 5.4, C.dim, 'left', '700');
+    txt(run.round >= run.totalRounds ? 'The final judgement is next.' : 'The AI is already writing the next one.', 12, y0 + 16, 5, C.faint, 'left', '400');
+  }
+
+  txt('SIDE: CONTINUE', W / 2, 245, 7, C.orange, 'center', '700');
+  hint('SIDE: CONTINUE');
+}
+
+/* =========================================================================
+   FINAL
+   ========================================================================= */
+function drawFinal() {
+  const run = S.run;
+  const you = run.you;
+  const won = run.won;
+
+  ctx.fillStyle = '#0a0c12';
+  ctx.fillRect(0, 0, W, 19);
+  hline(0, W, 19, C.line, 0.9);
+  txt('FINAL JUDGEMENT', 8, 6, 6, C.dim, 'left', '700');
+  txt(modeShort(run.mode), W - 8, 6, 5.4, C.faint, 'right', '700');
+
+  if (won) {
+    ctx.globalAlpha = 0.14 + Math.sin(GT * 2) * 0.05;
+    ctx.fillStyle = C.gold;
+    ctx.beginPath();
+    ctx.arc(W / 2, 52, 44, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  sigil(you.av, W / 2, 36, 13, 1, !won);
+  spaced(won ? 'VICTORY' : 'YOU DIED', W / 2, 58, 20, won ? C.gold : C.red, 1, 'center', '700');
+  txt('PLACE #' + you.place + ' OF ' + run.players.length + '    ' + you.points + ' PTS', W / 2, 84, 6, C.ink, 'center', '700');
+
+  const order = run.order || sortedPlayers(run);
+  const winner = order[0];
+  txt(won ? 'THE AI RANKS YOU FIRST. IT IS FURIOUS.' : winner.name + ' TAKES THE CROWN.', W / 2, 96, 5.4, won ? C.gold : C.dim, 'center', '700');
+
+  for (let i = 0; i < order.length; i++) {
+    const p = order[i];
+    const y = 110 + i * 20;
+    if (p.isYou) panel(6, y - 1, W - 12, 18, 'rgba(255,90,43,0.07)', null, 2);
+    txt('#' + (i + 1), 10, y + 2, 5.4, p.isYou ? C.orange : C.faint, 'left', '700');
+    sigil(p.av, 30, y + 7, 5, 0.9, false);
+    txt(p.name + (p.isYou ? ' (YOU)' : ''), 40, y + 2, 6, p.isYou ? C.ink : C.dim, 'left', '700');
+    txt(p.survives + '/' + run.round, 150, y + 2, 5, C.faint, 'right', '400');
+    txt(String(p.points), W - 10, y + 1, 6.4, p.isYou ? C.gold : C.ink, 'right', '700');
+  }
+
+  const newAch = run.newAch || [];
+  if (newAch.length) {
+    txt('NEW TROPHIES', 8, 195, 4.8, C.gold, 'left', '700');
+    for (let i = 0; i < Math.min(2, newAch.length); i++) {
+      txt('X ' + newAch[i], 8, 203 + i * 8, 5.2, C.gold, 'left', '700');
+    }
+    if (newAch.length > 2) txt('and ' + (newAch.length - 2) + ' more', 8, 219, 4.6, C.faint, 'left', '400');
+  } else {
+    txt('NO NEW TROPHIES. THE AI IS NOT IMPRESSED.', 8, 200, 4.8, C.faint, 'left', '400');
+  }
+
+  const opts = ['RUN IT AGAIN', 'MAIN MENU'];
+  for (let i = 0; i < 2; i++) {
+    const y = 226 + i * 15;
+    const sel = run.finalIdx === i;
+    if (sel) {
+      panel(6, y - 2, W - 12, 14, 'rgba(255,90,43,0.12)', 'rgba(255,90,43,0.5)', 2);
+    }
+    txt((sel ? '> ' : '  ') + opts[i], 12, y, 6.4, sel ? C.ink : C.dim, 'left', '700');
+  }
+  hint('WHEEL: MOVE    SIDE: SELECT');
+}
+
+/* =========================================================================
+   OVERLAYS + DISPATCH
+   ========================================================================= */
+function drawToast() {
+  if (!S.toast || S.toastT <= 0) return;
+  const a = Math.min(1, S.toastT * 2);
+  ctx.globalAlpha = a;
+  const sz = fitText(S.toast, W - 30, 6, '700', 4.6);
+  const w = measure(S.toast, sz, '700') + 16;
+  panel(W / 2 - w / 2, 23, w, 17, 'rgba(10,12,18,0.95)', S.toastColor || C.gold, 3);
+  txt(S.toast, W / 2, 28, sz, S.toastColor || C.gold, 'center', '700');
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+  drawBG();
+
+  ctx.save();
+  if (S.shake > 0.15) {
+    ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
+  }
+
+  if (S.screen === 'title') drawTitle();
+  else if (S.screen === 'menu') drawMenu();
+  else if (S.screen === 'pack') drawPack();
+  else if (S.screen === 'avatar') drawAvatar();
+  else if (S.screen === 'mods') drawMods();
+  else if (S.screen === 'help') drawHelp();
+  else if (S.screen === 'settings') drawSettings();
+  else if (S.screen === 'stats') drawStats();
+  else if (S.screen === 'about') drawAbout();
+  else if (S.screen === 'play' && S.run) {
+    const ph = S.run.phase;
+    if (ph === 'intro') drawIntro();
+    else if (ph === 'answer') drawAnswer();
+    else if (ph === 'confirm') drawConfirm();
+    else if (ph === 'forge') drawForge();
+    else if (ph === 'judging') drawJudging();
+    else if (ph === 'verdict') drawVerdict();
+    else if (ph === 'standings') drawStandings();
+    else if (ph === 'final') drawFinal();
+  }
+
+  drawToast();
+  ctx.restore();
+
+  if (G.settings.fx && scanPattern) {
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = scanPattern;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  if (vignette) ctx.drawImage(vignette, 0, 0);
+
+  if (S.flashT > 0) {
+    ctx.globalAlpha = Math.min(0.5, S.flashT);
+    ctx.fillStyle = S.flashColor || '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  if (S.fade > 0) {
+    ctx.globalAlpha = clamp(S.fade, 0, 1);
+    ctx.fillStyle = '#05060a';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* =========================================================================
+   INPUT / NAVIGATION
+   ========================================================================= */
+let lastVoiceEndAt = 0;
+let lastWheelAt = 0;
+
+function setScreen(s) {
+  S.screen = s;
+  S.t = 0;
+  S.fade = 1;
+  S.eraseArmed = false;
+}
+
+function afterVoiceStop() {
+  const run = S.run;
+  lastVoiceEndAt = performance.now();
+  if (!run || run.phase !== 'answer') return;
+  const comp = answerComposed(run);
+  if (comp) {
+    run.answer = comp;
+    run.voiceFinal = '';
+    run.voiceInterim = '';
+    run.phase = 'confirm';
+    run.t = 0;
+    run.usedForge = false;
+    sfx('select');
+  } else {
+    openForge();
+  }
+}
+
+function doScroll(d) {
+  initAudio();
+  S.lastInput = GT;
+  if (S.screen === 'menu') {
+    S.menu = (S.menu + d + MENU.length) % MENU.length;
+    sfx('move');
+  } else if (S.screen === 'pack') {
+    S.pack = (S.pack + d + PACKS.length) % PACKS.length;
+    sfx('move');
+  } else if (S.screen === 'avatar') {
+    S.avatar = (S.avatar + d + AVATARS.length) % AVATARS.length;
+    sfx('move');
+  } else if (S.screen === 'mods') {
+    S.mod = (S.mod + d + 4) % 4;
+    sfx('move');
+  } else if (S.screen === 'help') {
+    S.help = (S.help + d + 3) % 3;
+    sfx('move');
+  } else if (S.screen === 'settings') {
+    S.setIdx = (S.setIdx + d + SETTINGS_ROWS.length) % SETTINGS_ROWS.length;
+    S.eraseArmed = false;
+    sfx('move');
+  } else if (S.screen === 'stats') {
+    S.statsIdx = (S.statsIdx + d + 2) % 2;
+    sfx('move');
+  } else if (S.screen === 'play' && S.run) {
+    const run = S.run;
+    if (run.phase === 'forge') forgeMove(d);
+    else if (run.phase === 'final') { run.finalIdx = (run.finalIdx + d + 2) % 2; sfx('move'); }
+  }
+}
+
+function toggleSetting(id) {
+  if (id === 'sound') {
+    G.settings.sound = !G.settings.sound;
+    if (masterGain) masterGain.gain.value = G.settings.sound ? 0.9 : 0;
+    if (G.settings.sound) sfx('select');
+  } else if (id === 'narrator') {
+    G.settings.narrator = !G.settings.narrator;
+    sfx('select');
+  } else if (id === 'fx') {
+    G.settings.fx = !G.settings.fx;
+    sfx('select');
+  } else if (id === 'difficulty') {
+    G.settings.difficulty = (G.settings.difficulty + 1) % 3;
+    sfx('select');
+  } else if (id === 'bonus') {
+    G.settings.bonus = !G.settings.bonus;
+    sfx('select');
+  }
+  save();
+}
+
+function doSide() {
+  initAudio();
+  S.lastInput = GT;
+  if (performance.now() - lastVoiceEndAt < 650) return;
+
+  if (S.screen === 'title') { setScreen('menu'); sfx('select'); return; }
+  if (S.screen === 'menu') { menuSelect(); return; }
+
+  if (S.screen === 'pack') {
+    S.pendingMode = 'custom';
+    S.avatar = G.avatar;
+    setScreen('avatar');
+    sfx('select');
+    return;
+  }
+  if (S.screen === 'avatar') {
+    G.avatar = S.avatar;
+    save();
+    S.mod = 0;
+    setScreen('mods');
+    sfx('select');
+    return;
+  }
+  if (S.screen === 'mods') {
+    if (S.mod === 3) {
+      sfx('select');
+      startPendingRun();
+      S.fade = 1;
+      return;
+    }
+    const rows = modRows();
+    toggleSetting(rows[S.mod].id);
+    return;
+  }
+  if (S.screen === 'help') { setScreen('menu'); sfx('back'); return; }
+  if (S.screen === 'stats') { setScreen('menu'); sfx('back'); return; }
+  if (S.screen === 'about') { setScreen('menu'); sfx('back'); return; }
+  if (S.screen === 'settings') {
+    const row = SETTINGS_ROWS[S.setIdx];
+    if (row.k === 'erase') {
+      if (!S.eraseArmed) { S.eraseArmed = true; sfx('warn'); }
+      else {
+        G = JSON.parse(JSON.stringify(DEFAULT_SAVE));
+        S.eraseArmed = false;
+        save();
+        toast('ALL DATA ERASED', C.red);
+        sfx('death');
+      }
+      return;
+    }
+    toggleSetting(row.k);
+    return;
+  }
+
+  if (S.screen === 'play' && S.run) {
+    const run = S.run;
+    if (run.listening) { Voice.stop(afterVoiceStop); return; }
+
+    if (run.phase === 'intro') beginAnswer();
+    else if (run.phase === 'answer') {
+      const comp = answerComposed(run);
+      if (comp) {
+        run.answer = comp;
+        run.voiceFinal = '';
+        run.voiceInterim = '';
+        run.phase = 'confirm';
+        run.t = 0;
+        run.usedForge = false;
+        sfx('select');
+      } else {
+        openForge();
+      }
+    }
+    else if (run.phase === 'confirm') submitAnswer();
+    else if (run.phase === 'forge') forgeNext();
+    else if (run.phase === 'judging') { run.phase = 'verdict'; run.t = 0; run.viShown = -1; sfx('select'); }
+    else if (run.phase === 'verdict') verdictNext();
+    else if (run.phase === 'standings') continueFromStandings();
+    else if (run.phase === 'final') {
+      if (run.finalIdx === 0) replayRun();
+      else { S.run = null; setScreen('menu'); S.menu = 0; sfx('back'); }
+    }
+  }
+}
+
+function doLongStart() {
+  initAudio();
+  S.lastInput = GT;
+  if (S.screen === 'title') { setScreen('menu'); sfx('select'); return; }
+  if (S.screen !== 'play' || !S.run) return;
+  const run = S.run;
+  if (run.phase === 'intro') { beginAnswer(); return; }
+  if (run.phase === 'answer') { Voice.start(); return; }
+  if (run.phase === 'confirm') {
+    run.answer = '';
+    run.voiceFinal = '';
+    run.voiceInterim = '';
+    run.usedForge = false;
+    run.phase = 'answer';
+    run.t = 0;
+    Voice.start();
+    return;
+  }
+  if (run.phase === 'forge') {
+    run.phase = 'answer';
+    run.answer = '';
+    run.voiceFinal = '';
+    run.voiceInterim = '';
+    run.forge = null;
+    run.t = 0;
+    Voice.start();
+    return;
+  }
+  if (run.phase === 'final') { S.run = null; setScreen('menu'); sfx('back'); return; }
+}
+
+function doLongEnd() {
+  if (Voice.on) Voice.stop(afterVoiceStop);
+}
+
+function doBack() {
+  initAudio();
+  if (S.screen === 'play') {
+    const run = S.run;
+    if (!run) { setScreen('menu'); return; }
+    if (run.phase === 'final' || run.phase === 'standings') {
+      S.run = null;
+      setScreen('menu');
+      sfx('back');
+    }
+    return;
+  }
+  if (S.screen === 'menu') { setScreen('title'); sfx('back'); return; }
+  if (S.screen !== 'title') { setScreen('menu'); sfx('back'); }
+}
+
+/* ---------------- Rabbit R1 hardware + desktop fallbacks ---------------- */
+window.addEventListener('scrollUp', function (e) { if (e && e.preventDefault) e.preventDefault(); doScroll(-1); });
+window.addEventListener('scrollDown', function (e) { if (e && e.preventDefault) e.preventDefault(); doScroll(1); });
+window.addEventListener('sideClick', function () { doSide(); });
+window.addEventListener('longPressStart', function () { doLongStart(); });
+window.addEventListener('longPressEnd', function () { doLongEnd(); });
+
+window.addEventListener('wheel', function (e) {
+  e.preventDefault();
+  const now = performance.now();
+  if (now - lastWheelAt < 90) return;
+  lastWheelAt = now;
+  doScroll(e.deltaY > 0 ? 1 : -1);
+}, { passive: false });
+
+let ptrTimer = null, ptrLong = false, ptrDown = 0;
+let ptrStartX = 0, ptrStartY = 0, ptrDX = 0, ptrDY = 0, ptrSwiped = false;
+cv.addEventListener('pointerdown', function (e) {
+  e.preventDefault();
+  initAudio();
+  ptrDown = performance.now();
+  ptrLong = false;
+  ptrSwiped = false;
+  ptrStartX = e.clientX; ptrStartY = e.clientY;
+  ptrDX = 0; ptrDY = 0;
+  if (ptrTimer) clearTimeout(ptrTimer);
+  ptrTimer = setTimeout(function () {
+    ptrLong = true;
+    doLongStart();
+  }, 460);
+}, { passive: false });
+
+cv.addEventListener('pointermove', function (e) {
+  if (!ptrDown) return;
+  ptrDX = e.clientX - ptrStartX;
+  ptrDY = e.clientY - ptrStartY;
+  if (!ptrLong && Math.abs(ptrDY) > 22 && Math.abs(ptrDY) > Math.abs(ptrDX)) {
+    if (ptrTimer) { clearTimeout(ptrTimer); ptrTimer = null; }
+    ptrSwiped = true;
+  }
+}, { passive: false });
+
+cv.addEventListener('pointerup', function (e) {
+  e.preventDefault();
+  if (ptrTimer) { clearTimeout(ptrTimer); ptrTimer = null; }
+  if (ptrLong) {
+    ptrLong = false;
+    doLongEnd();
+  } else if (ptrSwiped) {
+    ptrSwiped = false;
+    doScroll(ptrDY > 0 ? 1 : -1);
+  } else if (performance.now() - lastVoiceEndAt > 500) {
+    doSide();
+  }
+  ptrDown = 0;
+}, { passive: false });
+
+cv.addEventListener('pointercancel', function () {
+  if (ptrTimer) { clearTimeout(ptrTimer); ptrTimer = null; }
+  if (ptrLong) { ptrLong = false; doLongEnd(); }
+  ptrSwiped = false;
+  ptrDown = 0;
+});
+
+cv.addEventListener('contextmenu', function (e) { e.preventDefault(); doBack(); });
+
+window.addEventListener('keydown', function (e) {
+  const k = e.key || '';
+  const low = k.toLowerCase();
+
+  if (low === 'f') {
+    e.preventDefault();
+    if (!e.repeat) doLongStart();
+    return;
+  }
+  if (k === 'ArrowUp' || k === 'ArrowLeft') { e.preventDefault(); doScroll(-1); return; }
+  if (k === 'ArrowDown' || k === 'ArrowRight') { e.preventDefault(); doScroll(1); return; }
+  if (k === 'Escape') { e.preventDefault(); doBack(); return; }
+  if (k === 'Enter' || k === ' ') {
+    e.preventDefault();
+    if (!e.repeat) doSide();
+    return;
+  }
+  if (k === 'Backspace') {
+    const run = S.run;
+    if (S.screen === 'play' && run && (run.phase === 'answer' || run.phase === 'confirm')) {
+      e.preventDefault();
+      run.answer = run.answer.slice(0, -1);
+      run.voiceFinal = '';
+      run.voiceInterim = '';
+      run.phase = 'answer';
+      sfx('tick');
+    } else {
+      e.preventDefault();
+      doBack();
+    }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (k.length === 1 && k.charCodeAt(0) >= 32) {
+    const run = S.run;
+    if (S.screen === 'play' && run && (run.phase === 'answer' || run.phase === 'confirm')) {
+      e.preventDefault();
+      run.answer += k;
+      run.voiceFinal = '';
+      run.voiceInterim = '';
+      run.phase = 'answer';
+      run.t = 0;
+    }
+  }
+}, { passive: false });
+
+window.addEventListener('keyup', function (e) {
+  if ((e.key || '').toLowerCase() === 'f') { e.preventDefault(); doLongEnd(); }
+}, { passive: false });
+
+document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', function () { setTimeout(resize, 120); });
+
+/* =========================================================================
+   UPDATE LOOP
+   ========================================================================= */
+function update(dt) {
+  GT += dt;
+  S.t += dt;
+  if (S.fade > 0) S.fade = Math.max(0, S.fade - dt * 3.4);
+  if (S.shake > 0) S.shake = Math.max(0, S.shake - dt * 26);
+  if (S.flashT > 0) S.flashT = Math.max(0, S.flashT - dt * 1.7);
+  if (S.toastT > 0) S.toastT -= dt;
+
+  const run = S.run;
+  if (S.screen !== 'play' || !run) return;
+  run.t += dt;
+
+  if (run.phase === 'answer') {
+    const prev = run.timeLeft;
+    run.timeLeft -= dt;
+    const sec = Math.ceil(run.timeLeft);
+    if (sec !== run.lastTick) {
+      run.lastTick = sec;
+      if (sec <= 10 && sec > 0) sfx('tick');
+    }
+    if (run.timeLeft <= 0) {
+      run.timeLeft = 0;
+      if (run.listening) {
+        run.phase = 'confirm';
+        Voice.stop(function () {
+          if (!S.run || S.run !== run) return;
+          run.answer = answerComposed(run);
+          submitAnswer();
+        });
+      } else {
+        run.answer = answerComposed(run);
+        submitAnswer();
+      }
+    }
+  } else if (run.phase === 'judging') {
+    if (run.t > 2.7) { run.phase = 'verdict'; run.t = 0; run.viShown = -1; sfx('select'); }
+  } else if (run.phase === 'verdict') {
+    if (run.viShown !== run.vi) {
+      run.viShown = run.vi;
+      const p = run.verdicts[run.vi];
+      if (p && p.isYou) {
+        if (p.pass) {
+          sfx('survive');
+          S.flashT = 0.2; S.flashColor = C.green;
+        } else {
+          sfx('death');
+          S.shake = 8;
+          S.flashT = 0.55; S.flashColor = C.red;
+          try { if (navigator.vibrate) navigator.vibrate(60); } catch (err) {}
+        }
+      }
+    }
+    if (run.t > 2.8) verdictNext();
+  }
+}
+
+let lastFrame = 0;
+function loop(ts) {
+  if (!lastFrame) lastFrame = ts;
+  let dt = (ts - lastFrame) / 1000;
+  lastFrame = ts;
+  if (!isFinite(dt) || dt < 0) dt = 0.016;
+  dt = Math.min(dt, 0.05);
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* =========================================================================
+   BOOT
+   ========================================================================= */
+function checkDaily() {
+  if (G.daily.date !== dayKey()) {
+    G.daily.date = dayKey();
+    G.daily.done = false;
+    G.daily.best = 0;
+    save();
+  }
+}
+
+loadSave();
+checkDaily();
+S.avatar = G.avatar || 0;
+S.run = null;
+resize();
+requestAnimationFrame(loop);
+
+// expose a tiny debug surface for verification harnesses
+window.JBA = {
+  get state() { return S; },
+  get save() { return G; },
+  judgeAnswer: judgeAnswer,
+  startRun: startRun,
+  scenarios: SCEN,
+  packs: PACKS,
+  bannedIn: bannedIn,
+  forgeText: forgeText,
+  doScroll: doScroll,
+  doSide: doSide,
+  doLongStart: doLongStart,
+  doLongEnd: doLongEnd,
+  render: render,
+  update: update,
+  setScreen: setScreen,
+  nextRound: nextRound
+};
+</script>
+</body>
+</html>
