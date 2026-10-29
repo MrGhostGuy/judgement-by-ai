@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=240, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#FE5000">
 <meta name="description" content="Death by AI style party game for the Rabbit R1. Five rounds, one local AI judge, 75 ways to die.">
 <link rel="icon" href="icon.png" type="image/png">
@@ -84,44 +84,6 @@ function hashStr(s) {
 }
 const pickR = (arr, rng) => arr[Math.floor(rng() * arr.length) % arr.length];
 
-function txt(s, x, y, size, color, align, weight) {
-  ctx.font = (weight || '400') + ' ' + size + 'px ' + MONO;
-  ctx.fillStyle = color || C.ink;
-  ctx.textAlign = align || 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText(s, x, y);
-  ctx.textAlign = 'left';
-}
-function measure(s, size, weight) {
-  ctx.font = (weight || '400') + ' ' + size + 'px ' + MONO;
-  return ctx.measureText(s).width;
-}
-function wrap(s, maxW, size, weight) {
-  ctx.font = (weight || '400') + ' ' + size + 'px ' + MONO;
-  const words = String(s).split(/\s+/);
-  const lines = [];
-  let line = '';
-  for (let i = 0; i < words.length; i++) {
-    const test = line ? line + ' ' + words[i] : words[i];
-    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = words[i]; }
-    else line = test;
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-function para(s, x, y, maxW, size, color, lh, weight, maxLines) {
-  const lines = wrap(s, maxW, size, weight);
-  const n = maxLines ? Math.min(lines.length, maxLines) : lines.length;
-  for (let i = 0; i < n; i++) {
-    let ln = lines[i];
-    if (maxLines && i === maxLines - 1 && lines.length > maxLines) {
-      while (ln.length > 4 && measure(ln + '...', size, weight) > maxW) ln = ln.slice(0, -1);
-      ln += '...';
-    }
-    txt(ln, x, y + i * lh, size, color, 'left', weight);
-  }
-  return n * lh;
-}
 function rr(x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
@@ -131,37 +93,6 @@ function rr(x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
-}
-function panel(x, y, w, h, fill, stroke, r) {
-  rr(x, y, w, h, r === undefined ? 3 : r);
-  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
-}
-function hline(x1, x2, y, color, alpha) {
-  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
-  ctx.fillStyle = color || C.line;
-  ctx.fillRect(x1, y, x2 - x1, 1);
-  ctx.globalAlpha = 1;
-}
-function vline(x, y1, y2, color, alpha) {
-  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
-  ctx.fillStyle = color || C.line;
-  ctx.fillRect(x, y1, 1, y2 - y1);
-  ctx.globalAlpha = 1;
-}
-function tag(s, x, y, bg, fg, size) {
-  size = size || 6;
-  ctx.font = '700 ' + size + 'px ' + MONO;
-  const w = ctx.measureText(s).width + 6;
-  panel(x, y, w, size + 5, bg, null, 2);
-  txt(s, x + 3, y + 2.5, size, fg, 'left', '700');
-  return w;
-}
-function fitText(s, maxW, size, weight, minSize) {
-  let sz = size;
-  minSize = minSize || 5;
-  while (sz > minSize && measure(s, sz, weight) > maxW) sz -= 0.5;
-  return sz;
 }
 
 /* ---------------- effects layer ---------------- */
@@ -913,7 +844,15 @@ function packPool(id) {
 
 function startRun(mode, packId) {
   const isDaily = mode === 'daily';
-  const seed = isDaily ? hashStr('jba-' + dayKey()) : (Date.now() ^ 0x9e3779b9);
+  let seed;
+  if (isDaily) {
+    seed = hashStr('jba-' + dayKey());
+  } else {
+    const hash = location.hash.slice(1);
+    const params = new URLSearchParams(hash);
+    const seedParam = params.get('seed');
+    seed = seedParam ? parseInt(seedParam, 10) : (Date.now() ^ 0x9e3779b9);
+  }
   const rng = mulberry32(seed);
 
   const roster = [];
@@ -963,7 +902,8 @@ function startRun(mode, packId) {
     forge: null, usedForge: false,
     narration: '', narrT: 0,
     newAch: [], trailingAt3: false,
-    lastTick: 60, finalIdx: 0, roundPoints: 0
+    lastTick: 60, finalIdx: 0, roundPoints: 0,
+    showHints: false
   };
 
   if (isDaily) {
@@ -983,6 +923,13 @@ function startRun(mode, packId) {
   S.t = 0;
   S.fade = 1;
   S.run.rng = mulberry32(seed);
+  if (!isDaily) {
+    const params = new URLSearchParams();
+    params.set('seed', String(seed));
+    params.set('mode', mode);
+    params.set('pack', packId || 'all');
+    try { location.hash = params.toString(); } catch (e) {}
+  }
   nextRound();
 }
 
@@ -1268,119 +1215,354 @@ function startPendingRun() {
 }
 
 /* =========================================================================
-   SHARED DRAWING
+   DESIGN SYSTEM
    ========================================================================= */
 let GT = 0;
+
+const UI  = "'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif";
+const NUM = "ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace";
+
+Object.assign(C, {
+  bg:      '#07080c',
+  panel:   '#101219',
+  panel2:  '#151924',
+  line:    '#252b3a',
+  ink:     '#f4f1e9',
+  dim:     '#aeb5c5',
+  faint:   '#7c8497',
+  orange:  '#ff6a3d',
+  orange2: '#ff9a6b',
+  red:     '#ff4463',
+  green:   '#4fe3a0',
+  gold:    '#ffca7a',
+  purple:  '#b79bff',
+  blue:    '#66c9ff',
+  blood:   '#c81e3a'
+});
+
+const PAD = 10, CW = W - PAD * 2, HEAD = 26, FOOT = 258;
+
 const ASH = [];
-for (let i = 0; i < 46; i++) {
-  ASH.push({ x: (i * 137.5) % W, y: (i * 71.3) % H, s: 0.4 + ((i * 13) % 10) / 10, v: 3 + (i % 7) });
+for (let i = 0; i < 40; i++) {
+  ASH.push({ x: (i * 137.5) % W, y: (i * 71.3) % H, s: 0.5 + ((i * 13) % 10) / 14, v: 3 + (i % 7) });
 }
 
-function spaced(s, x, y, size, color, sp, align, weight) {
-  ctx.font = (weight || '700') + ' ' + size + 'px ' + MONO;
+/* ---------------- typography ---------------- */
+const TS = 1.30;
+function T(s, x, y, size, color, align, weight, ls, fam) {
+  s = String(s);
+  size = size * TS * 1.2;
+  ctx.font = (weight || '400') + ' ' + size + 'px ' + (fam || UI);
+  ctx.fillStyle = color || C.ink;
+  ctx.textBaseline = 'top';
+  if (!ls) {
+    ctx.textAlign = align || 'left';
+    ctx.fillText(s, x, y);
+    ctx.textAlign = 'left';
+    return;
+  }
   let total = 0;
-  for (let i = 0; i < s.length; i++) total += ctx.measureText(s[i]).width + sp;
-  total -= sp;
+  for (let i = 0; i < s.length; i++) total += ctx.measureText(s[i]).width + ls;
+  total -= ls;
   let cx = align === 'center' ? x - total / 2 : (align === 'right' ? x - total : x);
-  ctx.fillStyle = color;
   ctx.textAlign = 'left';
-  ctx.fillText('', 0, 0);
   for (let i = 0; i < s.length; i++) {
     ctx.fillText(s[i], cx, y);
-    cx += ctx.measureText(s[i]).width + sp;
+    cx += ctx.measureText(s[i]).width + ls;
   }
 }
-
-function drawBG() {
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#0b0d14');
-  g.addColorStop(0.55, '#08090c');
-  g.addColorStop(1, '#0a0708');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
-  // drifting ash
-  ctx.fillStyle = 'rgba(220,215,200,0.10)';
-  for (let i = 0; i < ASH.length; i++) {
-    const a = ASH[i];
-    const y = (a.y + GT * a.v) % (H + 10) - 5;
-    const x = a.x + Math.sin(GT * 0.5 + i) * 4;
-    ctx.fillRect(x, y, a.s, a.s);
+function TM(s, size, weight, ls, fam) {
+  size = size * TS;
+  ctx.font = (weight || '400') + ' ' + size + 'px ' + (fam || UI);
+  const str = String(s);
+  if (!ls) return ctx.measureText(str).width;
+  let total = 0;
+  for (let i = 0; i < str.length; i++) total += ctx.measureText(str[i]).width + ls;
+  return total - ls;
+}
+function TW(s, maxW, size, weight, fam) {
+  size = size * TS;
+  ctx.font = (weight || '400') + ' ' + size + 'px ' + (fam || UI);
+  const words = String(s).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (let i = 0; i < words.length; i++) {
+    const test = line ? line + ' ' + words[i] : words[i];
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = words[i]; }
+    else line = test;
   }
+  if (line) lines.push(line);
+  return lines;
+}
+function TP(s, x, y, maxW, size, color, lh, weight, maxLines) {
+  const lines = TW(s, maxW, size, weight);
+  const n = maxLines ? Math.min(lines.length, maxLines) : lines.length;
+  for (let i = 0; i < n; i++) {
+    let ln = lines[i];
+    if (maxLines && i === maxLines - 1 && lines.length > maxLines) {
+      while (ln.length > 4 && TM(ln + '...', size, weight) > maxW) ln = ln.slice(0, -1);
+      ln += '...';
+    }
+    T(ln, x, y + i * lh, size, color, 'left', weight);
+  }
+  return n * lh;
+}
+function fit(s, maxW, size, weight, min, fam) {
+  let sz = size;
+  min = min || 5;
+  while (sz > min && TM(s, sz, weight, 0, fam) > maxW) sz -= 0.25;
+  return sz;
+}
 
-  // faint floor grid
-  ctx.strokeStyle = 'rgba(90,100,125,0.055)';
+/* ---------------- shapes ---------------- */
+function hair(x1, x2, y, color, alpha) {
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.fillStyle = color || C.line;
+  ctx.fillRect(x1, y, x2 - x1, 1);
+  ctx.globalAlpha = 1;
+}
+function card(x, y, w, h, o) {
+  o = o || {};
+  const r = o.r === undefined ? 8 : o.r;
+  rr(x, y, w, h, r);
+  // subtle drop shadow for depth
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 4;
+  if (o.tint) {
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, o.tint[0]);
+    g.addColorStop(1, o.tint[1]);
+    ctx.fillStyle = g;
+  } else {
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, 'rgba(255,255,255,0.064)');
+    g.addColorStop(1, 'rgba(255,255,255,0.022)');
+    ctx.fillStyle = g;
+  }
+  ctx.fill();
+  ctx.restore();
+  if (o.glow) {
+    ctx.save();
+    ctx.shadowColor = o.glow;
+    ctx.shadowBlur = 12;
+    ctx.strokeStyle = o.glow;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.strokeStyle = o.stroke || (o.selected ? 'rgba(255,106,61,0.5)' : 'rgba(255,255,255,0.075)');
   ctx.lineWidth = 1;
-  const off = (GT * 6) % 14;
-  for (let y = 40 + off; y < H; y += 14) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  ctx.stroke();
+  if (o.selected) {
+    ctx.save();
+    rr(x + 1, y + 1, w - 2, h - 2, Math.max(0, r - 1));
+    ctx.clip();
+    const hl = ctx.createLinearGradient(x, y, x, y + 16);
+    hl.addColorStop(0, 'rgba(255,140,95,0.14)');
+    hl.addColorStop(1, 'rgba(255,140,95,0)');
+    ctx.fillStyle = hl;
+    ctx.fillRect(x, y, w, 16);
+    ctx.restore();
+  } else {
+    ctx.save();
+    rr(x + 1, y + 1, w - 2, h - 2, Math.max(0, r - 1));
+    ctx.clip();
+    const hl = ctx.createLinearGradient(x, y, x, y + 10);
+    hl.addColorStop(0, 'rgba(255,255,255,0.04)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl;
+    ctx.fillRect(x, y, w, 10);
+    ctx.restore();
+  }
+  if (o.accent) {
+    ctx.fillStyle = o.accent;
+    rr(x + 1.5, y + 8, 2.5, h - 16, 1.25);
+    ctx.fill();
   }
 }
-
-function chrome(title, right) {
-  ctx.fillStyle = '#0a0c12';
-  ctx.fillRect(0, 0, W, 19);
-  hline(0, W, 19, C.line, 0.9);
-  txt(title, 8, 6, 6, C.dim, 'left', '700');
+function chip(s, x, y, fg, bg, size) {
+  size = size || 6.6;
+  const padX = 5;
+  const w = TM(s, size, '700') + padX * 2;
+  const h = size + 7;
+  rr(x, y, w, h, 4);
+  ctx.fillStyle = bg || 'rgba(255,255,255,0.07)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.09)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  T(s, x + w / 2, y + 3.2, size, fg, 'center', '700');
+  return w;
+}
+function sectionLabel(s, x, y, color, ls) {
+  ctx.fillStyle = color || C.faint;
+  ctx.beginPath();
+  ctx.arc(x + 2, y + 3, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  T(String(s).toUpperCase(), x + 8, y, 6.8, color || C.faint, 'left', '800', ls === undefined ? 0.8 : ls);
+}
+function headerBar(title, right, accent) {
+  const g = ctx.createLinearGradient(0, 0, 0, HEAD);
+  g.addColorStop(0, 'rgba(255,255,255,0.045)');
+  g.addColorStop(1, 'rgba(255,255,255,0.008)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, HEAD);
+  hair(0, W, HEAD - 0.5, C.line, 0.9);
+  if (accent) {
+    ctx.fillStyle = accent;
+    rr(PAD, 8.5, 2.5, 10, 1.25);
+    ctx.fill();
+    T(title, PAD + 8, 8, 8.8, C.ink, 'left', '800', 0.5);
+  } else {
+    T(title, PAD, 8, 8.8, C.ink, 'left', '800', 0.5);
+  }
   if (right) {
-    const sz = fitText(right, 120, 6, '700', 4.5);
-    txt(right, W - 8, 6, sz, C.faint, 'right', '700');
+    const sz = fit(right, 96, 7.0, '700', 6.0, NUM);
+    T(right, W - PAD, 9.2, sz, C.faint, 'right', '700', 0.5, NUM);
   }
 }
-
-function hint(s) {
-  ctx.fillStyle = '#0a0c12';
-  ctx.fillRect(0, H - 17, W, 17);
-  hline(0, W, H - 17, C.line, 0.9);
-  const sz = fitText(s, W - 16, 6, '700', 4.4);
-  txt(s, W / 2, H - 12, sz, C.faint, 'center', '700');
+function keycap(label, x, y, color, align) {
+  const s = 6.4;
+  const w = TM(label, s, '800') + 10;
+  const bx = align === 'right' ? x - w : x;
+  rr(bx, y, w, 12, 4);
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  T(label, bx + w / 2, y + 2.6, s, color || C.dim, 'center', '800', 0.4);
+  return w;
 }
-
-function blink(a, b) {
-  return (Math.sin(GT * 5.2) * 0.5 + 0.5) > 0.45 ? a : b;
+function keyHint(x, y, key, label, align) {
+  const kw = TM(key, 6.4, '800') + 10;
+  const lw = TM(label, 6.6, '700');
+  const total = kw + 5 + lw;
+  const sx = align === 'right' ? x - total : x;
+  keycap(key, sx, y, null, 'left');
+  T(label, sx + kw + 5, y + 2.8, 6.6, C.faint, 'left', '700', 0.3);
 }
+function footerBar(lk, ll, rk, rl) {
+  const g = ctx.createLinearGradient(0, FOOT, 0, H);
+  g.addColorStop(0, 'rgba(7,8,12,0)');
+  g.addColorStop(0.35, 'rgba(7,8,12,0.92)');
+  g.addColorStop(1, 'rgba(7,8,12,1)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, FOOT, W, H - FOOT);
+  hair(PAD, W - PAD, FOOT, C.line, 0.65);
+  keyHint(PAD, FOOT + 7, lk, ll, 'left');
+  if (rk) keyHint(W - PAD, FOOT + 7, rk, rl, 'right');
+}
+function button(s, y, o) {
+  o = o || {};
+  const h = o.h || 27;
+  const w = o.w || 196;
+  const x = (W - w) / 2;
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, '#ff7a4d');
+  g.addColorStop(1, '#ef5326');
+  rr(x, y, w, h, h / 2);
+  ctx.save();
+  ctx.shadowColor = 'rgba(255,106,61,0.42)';
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
+  rr(x, y, w, h, h / 2);
+  ctx.clip();
+  const hl = ctx.createLinearGradient(x, y, x, y + h * 0.6);
+  hl.addColorStop(0, 'rgba(255,255,255,0.28)');
+  hl.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = hl;
+  ctx.fillRect(x, y, w, h * 0.6);
+  ctx.restore();
+  T(s, W / 2, y + (h - (o.size || 8.8)) / 2 - 1, o.size || 8.8, o.color || '#1c0d06', 'center', '800', 0.8);
+  return y + h;
+}
+function emblem(cx, cy, r, tone) {
+  const col = tone || C.orange;
+  const g = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r * 1.9);
+  g.addColorStop(0, 'rgba(255,106,61,0.20)');
+  g.addColorStop(0.55, 'rgba(255,106,61,0.06)');
+  g.addColorStop(1, 'rgba(255,106,61,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 1.9, 0, Math.PI * 2);
+  ctx.fill();
 
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.11)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 5]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 11, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.strokeStyle = 'rgba(255,106,61,0.22)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+  ctx.stroke();
+
+  sigil(0, cx, cy, r, 1);
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(cx, cy - r - 11, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+}
 function sigil(idx, cx, cy, r, alpha, dead) {
   const av = AVATARS[idx % AVATARS.length];
-  const col = dead ? '#4a4f5e' : av.c;
+  const col = dead ? '#4c5263' : av.c;
   ctx.save();
   ctx.globalAlpha = alpha === undefined ? 1 : alpha;
   ctx.strokeStyle = col;
   ctx.fillStyle = col;
-  ctx.lineWidth = 1.4;
+  ctx.lineWidth = Math.max(1.3, r * 0.09);
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.globalAlpha *= 0.22;
+  ctx.globalAlpha *= 0.16;
   ctx.beginPath();
-  ctx.arc(cx, cy, r + 2.6, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r + Math.max(2, r * 0.14), 0, Math.PI * 2);
   ctx.stroke();
   ctx.globalAlpha = alpha === undefined ? 1 : alpha;
   const p = av.p;
-  const u = r * 0.52;
-  ctx.lineWidth = 1.6;
+  const u = r * 0.5;
+  ctx.lineWidth = Math.max(1.4, r * 0.1);
   ctx.beginPath();
   if (p === 0) {
     ctx.moveTo(cx - u, cy - u * 0.5); ctx.lineTo(cx - u, cy + u * 0.4);
     ctx.moveTo(cx + u, cy - u * 0.5); ctx.lineTo(cx + u, cy + u * 0.4);
     ctx.moveTo(cx - u * 0.7, cy + u * 0.8); ctx.quadraticCurveTo(cx, cy + u * 1.2, cx + u * 0.7, cy + u * 0.8);
+    ctx.stroke();
   } else if (p === 1) {
     ctx.moveTo(cx, cy - u); ctx.lineTo(cx - u, cy + u * 0.1); ctx.lineTo(cx, cy + u * 0.35); ctx.closePath();
     ctx.moveTo(cx, cy - u); ctx.lineTo(cx + u, cy + u * 0.1); ctx.lineTo(cx, cy + u * 0.35); ctx.closePath();
+    ctx.fill();
   } else if (p === 2) {
-    ctx.arc(cx, cy, u * 0.35, 0, Math.PI * 2);
-    ctx.moveTo(cx + u, cy); ctx.arc(cx, cy, u, 0, Math.PI * 2);
+    ctx.arc(cx, cy, u * 0.32, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, u, 0, Math.PI * 2);
+    ctx.stroke();
   } else if (p === 3) {
     ctx.moveTo(cx, cy + u); ctx.quadraticCurveTo(cx - u, cy, cx, cy - u);
     ctx.quadraticCurveTo(cx + u, cy, cx, cy + u);
+    ctx.fill();
   } else if (p === 4) {
     ctx.moveTo(cx - u * 0.2, cy - u); ctx.lineTo(cx + u * 0.5, cy - u * 0.1);
     ctx.lineTo(cx + u * 0.05, cy - u * 0.1); ctx.lineTo(cx + u * 0.3, cy + u);
     ctx.lineTo(cx - u * 0.5, cy - u * 0.05); ctx.lineTo(cx - u * 0.05, cy - u * 0.05);
     ctx.closePath();
+    ctx.fill();
   } else if (p === 5) {
     ctx.moveTo(cx - u, cy - u); ctx.lineTo(cx + u, cy + u);
     ctx.moveTo(cx + u, cy - u); ctx.lineTo(cx - u, cy + u);
+    ctx.stroke();
   } else if (p === 6) {
     for (let i = 0; i < 6; i++) {
       const a = -Math.PI / 2 + i * Math.PI / 3;
@@ -1388,31 +1570,78 @@ function sigil(idx, cx, cy, r, alpha, dead) {
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.closePath();
+    ctx.fill();
   } else {
     ctx.moveTo(cx - u, cy - u * 0.3);
     ctx.quadraticCurveTo(cx - u * 0.4, cy - u, cx, cy - u * 0.3);
     ctx.quadraticCurveTo(cx + u * 0.4, cy + u * 0.4, cx + u, cy - u * 0.3);
+    ctx.stroke();
   }
-  if (p === 1 || p === 2 || p === 3 || p === 4 || p === 6) ctx.fill(); else ctx.stroke();
   ctx.restore();
 }
-
 function roundPips(cx, y, round, total, bonus) {
-  const gap = 11;
+  const gap = 12;
   const startX = cx - (total - 1) * gap / 2;
   for (let i = 0; i < total; i++) {
     const done = i < round - 1;
     const cur = i === round - 1;
-    ctx.beginPath();
-    ctx.arc(startX + i * gap, y, cur ? 2.6 : 2, 0, Math.PI * 2);
-    if (cur) { ctx.fillStyle = bonus ? C.gold : C.orange; ctx.fill(); }
-    else if (done) { ctx.fillStyle = C.faint; ctx.fill(); }
-    else { ctx.strokeStyle = C.faint; ctx.lineWidth = 1; ctx.stroke(); }
+    if (cur) {
+      ctx.save();
+      ctx.shadowColor = bonus ? 'rgba(255,202,122,0.8)' : 'rgba(255,106,61,0.8)';
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = bonus ? C.gold : C.orange;
+      rr(startX + i * gap - 4, y - 1.5, 8, 3, 1.5);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(startX + i * gap, y, done ? 1.7 : 1.4, 0, Math.PI * 2);
+      if (done) { ctx.fillStyle = 'rgba(244,241,233,0.42)'; ctx.fill(); }
+      else { ctx.strokeStyle = 'rgba(244,241,233,0.18)'; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+  }
+}
+function blink(a, b) {
+  return (Math.sin(GT * 5.2) * 0.5 + 0.5) > 0.45 ? a : b;
+}
+function chevron(x, y, dir, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  if (dir > 0) { ctx.moveTo(x - 2, y - 4); ctx.lineTo(x + 2, y); ctx.lineTo(x - 2, y + 4); }
+  else { ctx.moveTo(x + 2, y - 4); ctx.lineTo(x - 2, y); ctx.lineTo(x + 2, y + 4); }
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+}
+
+/* ---------------- background ---------------- */
+function drawBG() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0a0c13');
+  g.addColorStop(0.5, '#07080c');
+  g.addColorStop(1, '#0a0809');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  const rg = ctx.createRadialGradient(W / 2, -30, 20, W / 2, -30, 210);
+  rg.addColorStop(0, 'rgba(255,106,61,0.12)');
+  rg.addColorStop(0.5, 'rgba(255,106,61,0.035)');
+  rg.addColorStop(1, 'rgba(255,106,61,0)');
+  ctx.fillStyle = rg;
+  ctx.fillRect(0, 0, W, H * 0.75);
+
+  ctx.fillStyle = 'rgba(220,215,200,0.075)';
+  for (let i = 0; i < ASH.length; i++) {
+    const a = ASH[i];
+    const y = (a.y + GT * a.v) % (H + 10) - 5;
+    const x = a.x + Math.sin(GT * 0.4 + i) * 5;
+    ctx.fillRect(x, y, a.s, a.s);
   }
 }
 
 /* =========================================================================
-   SCREENS - TITLE / MENU / SETUP
+   CONTENT LABELS
    ========================================================================= */
 const AV_FLAVOR = [
   'Keeps score. Holds grudges.',
@@ -1425,238 +1654,315 @@ const AV_FLAVOR = [
   'Goes with the current.'
 ];
 
-function drawTitle() {
-  const pulse = 1 + Math.sin(GT * 1.6) * 0.03;
-  ctx.save();
-  ctx.translate(W / 2, 56);
-  ctx.scale(pulse, pulse);
-  ctx.globalAlpha = 0.18;
-  ctx.strokeStyle = C.orange;
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(0, 0, 34 + Math.sin(GT * 2) * 2, 0, Math.PI * 2); ctx.stroke();
-  ctx.globalAlpha = 1;
-  sigil(0, 0, 0, 21, 1);
-  ctx.restore();
-
-  spaced('JUDGEMENT', W / 2, 86, 22, C.ink, 0.6, 'center');
-  spaced('BY AI', W / 2, 112, 22, C.orange, 0.6, 'center');
-
-  hline(48, W - 48, 144, C.line, 1);
-  txt('FIVE ROUNDS. ONE JUDGE.', W / 2, 151, 6, C.dim, 'center', '700');
-  txt('EVERY ANSWER IS A LAST WORD.', W / 2, 161, 6, C.dim, 'center', '700');
-
-  const a = blink(1, 0.35);
-  ctx.globalAlpha = a;
-  txt('PRESS SIDE TO BEGIN', W / 2, 186, 8, C.ink, 'center', '700');
-  ctx.globalAlpha = 1;
-
-  const best = G.stats.best || 0;
-  txt('BEST ' + best + '   RUNS ' + G.stats.runs + '   TROPHIES ' + Object.keys(G.ach).length + '/12', W / 2, 206, 5.4, C.faint, 'center', '700');
-
-  hline(30, W - 30, 222, C.line, 0.7);
-  txt('CREATED BY JEFF H.', W / 2, 230, 6, C.dim, 'center', '700');
-  txt('MR. GHOST / GHOSTLEGACYX', W / 2, 240, 6, C.orange, 'center', '700');
-  txt('v1.0  -  BUILT FOR RABBIT R1', W / 2, 254, 5, C.faint, 'center', '400');
-
-  if (G.daily.date === dayKey() && G.daily.done) {
-    tag('DAILY CLEARED', W - 10 - 52, 6, 'rgba(93,242,160,.15)', C.green, 5);
-  }
-}
-
-function drawMenu() {
-  chrome('MAIN MENU', 'BEST ' + (G.stats.best || 0));
-  const perPage = 6;
-  let start = clamp(S.menu - 2, 0, Math.max(0, MENU.length - perPage));
-  for (let i = 0; i < perPage && start + i < MENU.length; i++) {
-    const idx = start + i;
-    const it = MENU[idx];
-    const y = 27 + i * 26;
-    const sel = idx === S.menu;
-    if (sel) {
-      panel(6, y, W - 12, 24, 'rgba(255,90,43,0.10)', 'rgba(255,90,43,0.55)', 3);
-      ctx.fillStyle = C.orange;
-      ctx.fillRect(6, y + 2, 2.5, 20);
-    }
-    txt(it.label, 14, y + 3, 9.5, sel ? C.ink : C.dim, 'left', '700');
-    txt(it.sub, 14, y + 14, 5.6, sel ? C.dim : C.faint, 'left', '400');
-    txt(pad2(idx + 1), W - 12, y + 4, 5.5, sel ? C.orange : C.faint, 'right', '700');
-    if (it.id === 'daily' && G.daily.date === dayKey() && G.daily.done) {
-      tag('CLEARED', W - 44, y + 13, 'rgba(93,242,160,.14)', C.green, 4.6);
-    }
-  }
-
-  const y0 = 27 + perPage * 26 + 4;
-  panel(6, y0, W - 12, 40, 'rgba(255,255,255,0.025)', C.line, 3);
-  txt('YOUR RECORD', 12, y0 + 5, 5.4, C.faint, 'left', '700');
-  txt('WINS ' + G.stats.wins + '   RUNS ' + G.stats.runs + '   ROUNDS ' + G.stats.rounds, 12, y0 + 14, 5.4, C.dim, 'left', '700');
-  txt('BEST STREAK ' + G.stats.bestStreak + '   TROPHIES ' + Object.keys(G.ach).length + '/12', 12, y0 + 24, 5.4, C.dim, 'left', '700');
-
-  hint('WHEEL: MOVE    SIDE: SELECT');
-}
-
-function drawPack() {
-  chrome('SCENARIO PACKS', 'CUSTOM');
-  const perPage = 5;
-  let start = clamp(S.pack - 2, 0, Math.max(0, PACKS.length - perPage));
-  for (let i = 0; i < perPage && start + i < PACKS.length; i++) {
-    const idx = start + i;
-    const p = PACKS[idx];
-    const y = 27 + i * 26;
-    const sel = idx === S.pack;
-    const count = p.id === 'all' ? SCEN.length : packPool(p.id).length;
-    if (sel) {
-      panel(6, y, W - 12, 24, 'rgba(91,200,255,0.08)', 'rgba(91,200,255,0.5)', 3);
-      ctx.fillStyle = C.blue;
-      ctx.fillRect(6, y + 2, 2.5, 20);
-    }
-    txt(p.name, 14, y + 3, 9, sel ? C.ink : C.dim, 'left', '700');
-    txt(count + ' PROMPTS', 14, y + 14, 5.4, sel ? C.blue : C.faint, 'left', '700');
-  }
-  const p = PACKS[S.pack];
-  const y0 = 164;
-  panel(6, y0, W - 12, 70, 'rgba(255,255,255,0.025)', C.line, 3);
-  txt('PACK BRIEF', 12, y0 + 6, 5.4, C.faint, 'left', '700');
-  para(p.desc, 12, y0 + 16, W - 24, 7.5, C.ink, 10, '400', 4);
-  txt('SCENARIOS ARE DRAWN WITHOUT REPEATS.', 12, y0 + 57, 5, C.faint, 'left', '400');
-  hint('WHEEL: MOVE    SIDE: CHOOSE');
-}
-
-function drawAvatar() {
-  chrome('CHOOSE YOUR SIGIL', '4 CONTESTANTS');
-  const cw = 54, ch = 60, gx = 6, gy = 27;
-  for (let i = 0; i < AVATARS.length; i++) {
-    const col = i % 4, row = Math.floor(i / 4);
-    const x = gx + col * (cw + 3);
-    const y = gy + row * (ch + 5);
-    const sel = i === S.avatar;
-    panel(x, y, cw, ch, sel ? 'rgba(255,90,43,0.10)' : 'rgba(255,255,255,0.02)', sel ? C.orange : C.line, 3);
-    sigil(i, x + cw / 2, y + 24, 14, sel ? 1 : 0.55);
-    const nm = AVATARS[i].name;
-    txt(nm, x + cw / 2, y + 44, 5.4, sel ? C.ink : C.dim, 'center', '700');
-    if (i === G.avatar) txt('LAST', x + cw / 2, y + 51, 4.2, C.faint, 'center', '400');
-  }
-  const av = AVATARS[S.avatar];
-  txt(av.name, 8, 168, 13, av.c, 'left', '700');
-  para(AV_FLAVOR[S.avatar % AV_FLAVOR.length], 8, 184, W - 16, 7, C.dim, 9, '400', 2);
-  panel(6, 208, W - 12, 34, 'rgba(255,255,255,0.025)', C.line, 3);
-  txt('RIVALS', 12, 213, 5, C.faint, 'left', '700');
-  txt('VEX  /  MOTH  /  PIP  and friends', 12, 222, 6, C.dim, 'left', '700');
-  txt('They are also trying to impress the AI.', 12, 232, 5.4, C.faint, 'left', '400');
-  hint('WHEEL: MOVE    SIDE: CONFIRM');
-}
-
 const MODE_LABEL = { judgement: 'JUDGEMENT DAY', lone: 'LONE SURVIVOR', daily: 'DAILY DOOM', custom: 'CUSTOM RUN' };
 const MODE_DESC = {
-  judgement: 'Everyone tries to impress the AI. Most points after five rounds takes it.',
+  judgement: 'Everyone answers. The AI scores every answer. Most points after five rounds wins.',
   lone: 'The AI spares exactly one contestant per round. Everyone else dies.',
-  daily: 'A fixed set of five scenarios. Same for every player, every day.',
+  daily: 'Five fixed scenarios, seeded by the date. Same death for everyone, every day.',
   custom: 'A hand-picked pack of scenarios. Same rules, different nightmares.'
 };
 
 function modRows() {
   return [
     { id: 'difficulty', label: 'DIFFICULTY', val: ['FORGIVING', 'STANDARD', 'MERCILESS'][G.settings.difficulty] },
-    { id: 'bonus', label: 'BONUS ROUNDS', val: G.settings.bonus ? 'ON  (R3 x2, R5 x3)' : 'OFF' },
+    { id: 'bonus', label: 'BONUS ROUNDS', val: G.settings.bonus ? 'ON' : 'OFF' },
     { id: 'narrator', label: 'AI NARRATOR', val: G.settings.narrator ? 'ON' : 'OFF' },
     { id: 'begin', label: 'BEGIN JUDGEMENT', val: 'SIDE' }
   ];
 }
 
+/* =========================================================================
+   TITLE
+   ========================================================================= */
+function drawTitle() {
+  emblem(W / 2, 72, 33);
+
+  T('JUDGEMENT', W / 2, 118, 24, C.ink, 'center', '800', 1.2);
+  T('BY AI', W / 2, 145, 24, C.orange, 'center', '800', 1.2);
+
+  hair(52, W - 52, 177, C.line, 0.85);
+  ctx.fillStyle = C.orange;
+  ctx.save();
+  ctx.translate(W / 2, 177.5);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillRect(-1.6, -1.6, 3.2, 3.2);
+  ctx.restore();
+
+  T('FIVE ROUNDS. ONE JUDGE.', W / 2, 186, 8.2, C.dim, 'center', '700', 0.9);
+  T('BY JEFF H.  /  MR. GHOST', W / 2, 198, 6.8, C.faint, 'center', '700', 0.6);
+
+  button('PRESS SIDE TO BEGIN', 210, { w: 200, h: 28 });
+
+  const cols = [
+    ['BEST', String(G.stats.best || 0), C.gold],
+    ['RUNS', String(G.stats.runs || 0), C.ink],
+    ['TROPHIES', Object.keys(G.ach).length + '/12', C.orange2]
+  ];
+  for (let i = 0; i < 3; i++) {
+    const cx = 46 + i * 74;
+    T(cols[i][1], cx, 248, 9.2, cols[i][2], 'center', '700', 0.2, NUM);
+    T(cols[i][0], cx, 259, 6.2, C.faint, 'center', '800', 0.9);
+  }
+
+  if (G.daily.date === dayKey() && G.daily.done) {
+    const w = chip('DAILY CLEARED', W - PAD - 74, 34, C.green, 'rgba(79,227,160,0.12)', 5.6);
+  }
+}
+
+/* =========================================================================
+   MAIN MENU
+   ========================================================================= */
+function drawMenu() {
+  headerBar('MAIN MENU', 'BEST ' + (G.stats.best || 0), C.orange);
+  const perPage = 5;
+  const start = clamp(S.menu - 2, 0, Math.max(0, MENU.length - perPage));
+  for (let i = 0; i < perPage && start + i < MENU.length; i++) {
+    const idx = start + i;
+    const it = MENU[idx];
+    const y = 32 + i * 37;
+    const sel = idx === S.menu;
+    card(PAD, y, CW, 33, { selected: sel, r: 7 });
+    if (sel) { ctx.fillStyle = C.orange; rr(PAD + 1.5, y + 7, 2.5, 19, 1.25); ctx.fill(); }
+
+    ctx.beginPath();
+    ctx.arc(PAD + 19, y + 16.5, 8.5, 0, Math.PI * 2);
+    ctx.fillStyle = sel ? 'rgba(255,106,61,0.16)' : 'rgba(255,255,255,0.045)';
+    ctx.fill();
+    ctx.strokeStyle = sel ? 'rgba(255,106,61,0.5)' : 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    T(pad2(idx + 1), PAD + 19, y + 13.2, 6.2, sel ? C.orange2 : C.faint, 'center', '800', 0.2, NUM);
+
+    T(it.label, PAD + 35, y + 4.5, 9.8, sel ? C.ink : C.dim, 'left', '800', 0.3);
+    T(it.sub, PAD + 35, y + 18, 7.6, sel ? C.dim : C.faint, 'left', '400');
+    chevron(W - 17, y + 16.5, 1, sel ? C.orange : 'rgba(255,255,255,0.18)');
+
+    if (it.id === 'daily' && G.daily.date === dayKey() && G.daily.done) {
+      const w = chip('CLEARED', W - 60, y + 10, C.green, 'rgba(79,227,160,0.12)', 6.0);
+    }
+  }
+
+  card(PAD, 222, CW, 24, { r: 6 });
+  const vals = [
+    ['WINS', G.stats.wins],
+    ['RUNS', G.stats.runs],
+    ['BEST STREAK', G.stats.bestStreak],
+    ['ROUNDS', G.stats.rounds]
+  ];
+  for (let i = 0; i < 4; i++) {
+    const cx = PAD + 27 + i * 55;
+    T(String(vals[i][1]), cx, 226, 8.6, i === 0 ? C.gold : C.ink, 'center', '700', 0.2, NUM);
+    T(vals[i][0], cx, 237.5, 6.2, C.faint, 'center', '800', 0.5);
+    if (i < 3) {
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = C.line;
+      ctx.fillRect(PAD + 54 + i * 55, 227, 1, 16);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  footerBar('WHEEL', 'MOVE', 'SIDE', 'SELECT');
+}
+
+/* =========================================================================
+   PACK PICKER
+   ========================================================================= */
+function drawPack() {
+  headerBar('SCENARIO PACKS', 'CUSTOM RUN', C.blue);
+  const perPage = 4;
+  const start = clamp(S.pack - 1, 0, Math.max(0, PACKS.length - perPage));
+  for (let i = 0; i < perPage && start + i < PACKS.length; i++) {
+    const idx = start + i;
+    const p = PACKS[idx];
+    const y = 32 + i * 38;
+    const sel = idx === S.pack;
+    const count = p.id === 'all' ? SCEN.length : packPool(p.id).length;
+    card(PAD, y, CW, 34, { selected: sel, r: 7 });
+    if (sel) { ctx.fillStyle = C.blue; rr(PAD + 1.5, y + 8, 2.5, 18, 1.25); ctx.fill(); }
+    T(p.name, PAD + 13, y + 5, 9.4, sel ? C.ink : C.dim, 'left', '800', 0.3);
+    T(count + ' SCENARIOS', PAD + 13, y + 18, 7.2, sel ? C.blue : C.faint, 'left', '700', 0.2, NUM);
+    chevron(W - 17, y + 17, 1, sel ? C.blue : 'rgba(255,255,255,0.18)');
+  }
+
+  const p = PACKS[S.pack];
+  const count = p.id === 'all' ? SCEN.length : packPool(p.id).length;
+  card(PAD, 188, CW, 62, { r: 7 });
+  sectionLabel('PACK BRIEF', PAD + 8, 195, C.faint);
+  chip(count + ' CARDS', W - PAD - 8 - (TM(count + ' CARDS', 6.0, '800') + 10), 192, C.blue, 'rgba(102,201,255,0.1)', 6.0);
+  T(p.name, PAD + 8, 208, 8.8, C.ink, 'left', '800', 0.3);
+  TP(p.desc, PAD + 8, 221, CW - 16, 8.0, C.dim, 10.6, '400', 2);
+  T('No repeats inside a run.', PAD + 8, 239, 6.6, C.faint, 'left', '400');
+
+  footerBar('WHEEL', 'MOVE', 'SIDE', 'CHOOSE');
+}
+
+/* =========================================================================
+   AVATAR
+   ========================================================================= */
+function drawAvatar() {
+  headerBar('CHOOSE YOUR SIGIL', '4 CONTESTANTS', C.purple);
+  const tw = 51, th = 55;
+  for (let i = 0; i < AVATARS.length; i++) {
+    const col = i % 4, row = Math.floor(i / 4);
+    const x = PAD + col * 55, y = 32 + row * 60;
+    const sel = i === S.avatar;
+    card(x, y, tw, th, { selected: sel, r: 7 });
+    sigil(i, x + tw / 2, y + 21, 13, sel ? 1 : 0.5);
+    T(AVATARS[i].name, x + tw / 2, y + 38, 6.6, sel ? C.ink : C.faint, 'center', '800', 0.3);
+    if (i === G.avatar) {
+      ctx.fillStyle = C.gold;
+      ctx.beginPath();
+      ctx.arc(x + tw - 7, y + 7, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const av = AVATARS[S.avatar];
+  T(av.name, PAD, 158, 15, av.c, 'left', '800', 0.6);
+  TP(AV_FLAVOR[S.avatar % AV_FLAVOR.length], PAD, 178, CW, 8.4, C.dim, 10.8, '400', 2);
+
+  card(PAD, 202, CW, 46, { r: 7 });
+  sectionLabel('YOUR RIVALS', PAD + 8, 208, C.faint);
+  TP('Same judge. Worse attitudes.', PAD + 8, 220, CW - 16, 8.4, C.dim, 9.8, '400', 1);
+  T('They will gloat.', PAD + 8, 232, 7.0, C.faint, 'left', '400');
+
+  footerBar('WHEEL', 'MOVE', 'SIDE', 'CONFIRM');
+}
+
+/* =========================================================================
+   MODIFIERS
+   ========================================================================= */
 function drawMods() {
   const mode = S.pendingMode || 'judgement';
-  chrome(MODE_LABEL[mode], mode === 'daily' ? dayKey() : 'SETUP');
-  para(MODE_DESC[mode], 8, 25, W - 16, 6.6, C.dim, 8.6, '400', 3);
+  headerBar(MODE_LABEL[mode], mode === 'daily' ? dayKey() : 'SETUP', C.orange);
+  TP(MODE_DESC[mode], PAD, 33, CW, 8.2, C.dim, 10.8, '400', 2);
 
   const rows = modRows();
   for (let i = 0; i < rows.length; i++) {
-    const y = 66 + i * 28;
+    const y = 60 + i * 34;
     const sel = i === S.mod;
     const row = rows[i];
+    const begin = row.id === 'begin';
+    card(PAD, y, CW, 30, { selected: sel && !begin, r: 7, stroke: begin && sel ? 'rgba(79,227,160,0.5)' : null });
     if (sel) {
-      panel(6, y, W - 12, 24, row.id === 'begin' ? 'rgba(93,242,160,0.10)' : 'rgba(255,90,43,0.09)',
-        row.id === 'begin' ? C.green : 'rgba(255,90,43,0.55)', 3);
+      ctx.fillStyle = begin ? C.green : C.orange;
+      rr(PAD + 1.5, y + 6, 2.5, 18, 1.25);
+      ctx.fill();
     }
-    txt(row.label, 12, y + 4, 7.6, sel ? C.ink : C.dim, 'left', '700');
-    txt(row.val, W - 12, y + 12, 5.6, sel ? (row.id === 'begin' ? C.green : C.orange) : C.faint, 'right', '700');
+    T(row.label, PAD + 13, y + 6, 9.2, sel ? C.ink : C.dim, 'left', '700', 0.3);
+    const vw = TM(row.val, 7.4, '800') + 2;
+    T(row.val, W - PAD - 11, y + 11.5, 7.4, sel ? (begin ? C.green : C.orange2) : C.faint, 'right', '800', 0.2);
+    if (!begin) chevron(W - PAD - 11 - vw - 7, y + 15, 1, sel ? C.orange : 'rgba(255,255,255,0.2)');
   }
 
   const d = G.settings.difficulty;
-  const th = THRESH[d];
+  const th = [42, 50, 58][d];
+  card(PAD, 200, CW, 52, { r: 7 });
+  sectionLabel('THE JUDGE', PAD + 8, 205, C.faint);
+  T(String(th), W - PAD - 8, 203, 16, C.gold, 'right', '700', 0.2, NUM);
+  T('PASS MARK', W - PAD - 8, 222, 6.0, C.faint, 'right', '800', 0.6);
   const dd = [
-    'The AI is in a good mood. Pass mark ' + th + '.',
-    'The AI is fair. Pass mark ' + th + '.',
-    'The AI hates you. Pass mark ' + th + '.'
+    'In a good mood. The AI is lenient.',
+    'Fair. The AI is not.',
+    'The AI hates you. Good luck.'
   ][d];
-  panel(6, 186, W - 12, 66, 'rgba(255,255,255,0.025)', C.line, 3);
-  txt('THE JUDGE', 12, 191, 5.2, C.faint, 'left', '700');
-  para(dd, 12, 200, W - 24, 6.6, C.ink, 8.6, '400', 2);
-  txt('BONUS ROUNDS MULTIPLY POINTS.', 12, 222, 5, C.faint, 'left', '400');
-  txt('THE AI DOES NOT NEGOTIATE.', 12, 230, 5, C.faint, 'left', '400');
-  txt('FORBIDDEN: SURVIVE / WIN / SAFE / ALIVE', 12, 239, 4.8, C.red, 'left', '700');
-  hint('WHEEL: MOVE    SIDE: CHANGE / START');
+  TP(dd, PAD + 8, 220, CW - 66, 7.6, C.dim, 9.6, '400', 2);
+  T('BANNED: SURVIVE / WIN / SAFE / ALIVE', PAD + 8, 240, 6.0, C.red, 'left', '800', 0.2);
+
+  footerBar('WHEEL', 'MOVE', 'SIDE', 'CHANGE');
 }
 
+/* =========================================================================
+   HELP
+   ========================================================================= */
 function drawHelp() {
-  chrome('HOW TO PLAY', 'PAGE ' + (S.help + 1) + '/3');
-  const y = 26;
+  headerBar('HOW TO PLAY', 'PAGE ' + (S.help + 1) + ' / 3', C.orange);
   if (S.help === 0) {
-    txt('THE LOOP', 8, y, 10, C.orange, 'left', '700');
-    para('Five rounds. Each round the AI drops you into a deadly scenario. You get 60 seconds to explain, out loud, how you get out of it.', 8, y + 16, W - 16, 7.4, C.ink, 10, '400');
-    para('The AI reads your answer and decides whether you live or die. Surviving earns points. The most points after five rounds wins.', 8, y + 64, W - 16, 7.4, C.ink, 10, '400');
-    para('Your three rivals are judged by the same AI. They will gloat.', 8, y + 112, W - 16, 7.4, C.dim, 10, '400');
-    txt('NOBODY GETS A SECOND CHANCE.', 8, y + 146, 6.4, C.faint, 'left', '700');
+    sectionLabel('THE LOOP', PAD, 34, C.orange);
+    TP('Five rounds. Each round the AI drops you into a deadly scenario. You get sixty seconds to explain how you get out.', PAD, 50, CW, 8.6, C.ink, 12, '400', 4);
+
+    card(PAD, 102, CW, 46, { r: 7 });
+    T('60', PAD + 12, 108, 24, C.orange, 'left', '800', 0.5, NUM);
+    T('SECONDS', PAD + 12, 134, 6.2, C.faint, 'left', '800', 0.8);
+    hair(PAD + 54, PAD + 54, 112, C.line, 1);
+    T('5', PAD + 66, 110, 18, C.ink, 'left', '700', 0.2, NUM);
+    T('ROUNDS', PAD + 66, 131, 6.2, C.faint, 'left', '800', 0.8);
+    hair(PAD + 104, PAD + 104, 112, C.line, 1);
+    TP('Score to climb. Most points wins.', PAD + 116, 110, 96, 7.6, C.dim, 9.8, '400', 2);
+
+    TP('The AI reads your answer and decides. Your three rivals are judged by the same rules.', PAD, 160, CW, 8.4, C.dim, 11.2, '400', 3);
+
+    card(PAD, 206, CW, 42, { r: 7, tint: ['rgba(255,68,99,0.10)', 'rgba(255,68,99,0.03)'] });
+    T('NOBODY GETS A SECOND CHANCE.', PAD + 10, 214, 8.6, C.red, 'left', '800', 0.5);
+    T('Except you. You get five.', PAD + 10, 228, 7.6, C.dim, 'left', '400');
   } else if (S.help === 1) {
-    txt('CONTROLS', 8, y, 10, C.orange, 'left', '700');
+    sectionLabel('CONTROLS', PAD, 33, C.blue);
     const items = [
-      ['WHEEL', 'Move through menus and options.'],
-      ['SIDE TAP', 'Select, confirm, continue.'],
-      ['HOLD SIDE', 'Push-to-talk. Speak your answer.'],
-      ['RELEASE', 'Stop recording. Review it.'],
-      ['SIDE TAP', 'Submit the answer to the AI.']
+      ['WHEEL', 'Scroll menus and change options.'],
+      ['SIDE', 'Tap to select, confirm or continue.'],
+      ['HOLD', 'Push-to-talk. Speak your answer.'],
+      ['RELEASE', 'Stop recording, then review it.'],
+      ['TAP', 'Submit it to the AI. No takebacks.']
     ];
-    let yy = y + 18;
     for (let i = 0; i < items.length; i++) {
-      tag(items[i][0], 8, yy, 'rgba(91,200,255,0.12)', C.blue, 5);
-      txt(items[i][1], 8, yy + 11, 6.4, C.ink, 'left', '400');
-      yy += 26;
+      const y = 46 + i * 30;
+      card(PAD, y, CW, 26, { r: 6 });
+      keycap(items[i][0], PAD + 7, y + 7, C.blue, 'left');
+      T(items[i][1], PAD + 64, y + 8, 8.2, C.ink, 'left', '400');
     }
-    para('If speech is unavailable, the FORGE builds an answer from parts. It is not cheating. It is survival.', 8, yy + 2, W - 16, 6.4, C.dim, 8.4, '400', 3);
+    TP('No microphone? The FORGE builds an answer from five parts. It is not cheating. It is survival.', PAD, 202, CW, 8.0, C.dim, 10.4, '400', 3);
+    chip('SWIPE ALSO SCROLLS', PAD, 236, C.faint, 'rgba(255,255,255,0.05)', 6.2);
   } else {
-    txt('THE FINE PRINT', 8, y, 10, C.red, 'left', '700');
-    para('These words are forbidden in every answer:', 8, y + 17, W - 16, 7.2, C.ink, 9.6, '400');
+    T('FORBIDDEN WORDS', PAD, 33, 11, C.red, 'left', '800', 0.5);
+    TP('Say any of these and you die. No matter how good the plan was.', PAD, 48, CW, 8.2, C.ink, 10.6, '400', 2);
     const banned = ['SURVIVE', 'WIN', 'SAFE', 'SAFETY', 'ALIVE'];
+    let bx = PAD, by = 72;
     for (let i = 0; i < banned.length; i++) {
-      const w = measure(banned[i], 7, '700') + 10;
-      tag(banned[i], 8 + (i % 3) * 74, y + 30 + Math.floor(i / 3) * 18, 'rgba(255,45,85,0.12)', C.red, 6);
+      const w = TM(banned[i], 7, '800') + 16;
+      if (bx + w > W - PAD) { bx = PAD; by += 19; }
+      chip(banned[i], bx, by, C.red, 'rgba(255,68,99,0.12)', 7);
+      bx += w + 5;
     }
-    para('Say one and you die, no matter how good the plan was. The AI checks. The AI always checks.', 8, y + 70, W - 16, 7.2, C.ink, 9.8, '400');
-    para('Cheese works: dreams, wake-ups, plot armor. It also gets stale. Repeat it and the AI notices.', 8, y + 104, W - 16, 7.2, C.dim, 9.8, '400');
-    para('Bonus rounds: round 3 is worth x2, round 5 is worth x3.', 8, y + 148, W - 16, 7.2, C.gold, 9.8, '400');
+
+    card(PAD, 108, CW, 58, { r: 7 });
+    sectionLabel('CHEESE', PAD + 8, 114, C.gold);
+    TP('Dreams, wake-ups and plot armor work. Once. Repeat them and the AI notices.', PAD + 8, 126, CW - 16, 8.0, C.dim, 10.4, '400', 3);
+
+    card(PAD, 172, CW, 40, { r: 7 });
+    sectionLabel('BONUS ROUNDS', PAD + 8, 178, C.gold);
+    T('Round 3 pays x2. Round 5 pays x3.', PAD + 8, 190, 8.4, C.ink, 'left', '700', 0.2);
+    T('Everyone earns at the same rate.', PAD + 8, 202, 6.8, C.faint, 'left', '400');
   }
-  txt('WHEEL: PAGE    SIDE: BACK', W / 2, H - 30, 5.2, C.faint, 'center', '700');
-  hint('SIDE: BACK TO MENU');
+  footerBar('WHEEL', 'PAGE', 'SIDE', 'BACK');
 }
 
+/* =========================================================================
+   SETTINGS
+   ========================================================================= */
 function drawSettings() {
-  chrome('SETTINGS', 'SAVED');
+  headerBar('SETTINGS', 'AUTO-SAVED', C.orange);
   for (let i = 0; i < SETTINGS_ROWS.length; i++) {
     const row = SETTINGS_ROWS[i];
-    const y = 27 + i * 28;
+    const y = 31 + i * 31;
     const sel = i === S.setIdx;
+    const danger = i === SETTINGS_ROWS.length - 1;
+    card(PAD, y, CW, 27, { selected: sel && !danger, r: 6, stroke: sel && danger ? 'rgba(255,68,99,0.55)' : null });
     if (sel) {
-      panel(6, y, W - 12, 24, i === 5 ? 'rgba(255,45,85,0.10)' : 'rgba(255,90,43,0.09)',
-        i === 5 ? 'rgba(255,45,85,0.6)' : 'rgba(255,90,43,0.5)', 3);
+      ctx.fillStyle = danger ? C.red : C.orange;
+      rr(PAD + 1.5, y + 6, 2.5, 15, 1.25);
+      ctx.fill();
     }
-    txt(row.label, 12, y + 4, 7.2, sel ? C.ink : C.dim, 'left', '700');
+    T(row.label, PAD + 13, y + 6.5, 8.5, sel ? C.ink : C.dim, 'left', '700', 0.3);
     let v = row.vals[0];
     if (row.k === 'sound') v = G.settings.sound ? 'ON' : 'OFF';
     else if (row.k === 'narrator') v = G.settings.narrator ? 'ON' : 'OFF';
     else if (row.k === 'fx') v = G.settings.fx ? 'ON' : 'OFF';
     else if (row.k === 'difficulty') v = row.vals[G.settings.difficulty];
     else if (row.k === 'bonus') v = G.settings.bonus ? 'ON' : 'OFF';
-    else if (row.k === 'erase') v = S.eraseArmed ? 'TAP AGAIN' : 'HOLD...';
-    txt(v, W - 12, y + 12, 5.6, sel ? (i === 5 ? C.red : C.orange) : C.faint, 'right', '700');
+    else if (row.k === 'erase') v = S.eraseArmed ? 'TAP AGAIN' : 'RESET';
+    T(v, W - PAD - 10, y + 10, 7.4, sel ? (danger ? C.red : C.orange2) : C.faint, 'right', '800', 0.3);
   }
+
   const notes = [
     'All sound is generated on the device.',
     'Adds a narrator line between rounds.',
@@ -1665,83 +1971,112 @@ function drawSettings() {
     'Round 3 pays x2. Round 5 pays x3.',
     'Clears stats, trophies and daily record.'
   ];
-  panel(6, 198, W - 12, 50, 'rgba(255,255,255,0.025)', C.line, 3);
-  txt('NOTE', 12, 203, 5, C.faint, 'left', '700');
-  para(notes[S.setIdx], 12, 212, W - 24, 6.4, C.ink, 8.4, '400', 3);
-  hint('WHEEL: MOVE    SIDE: CHANGE');
+  card(PAD, 220, CW, 30, { r: 6 });
+  sectionLabel('NOTE', PAD + 8, 224, C.faint);
+  T(notes[S.setIdx], PAD + 8, 236, 7.6, C.ink, 'left', '400');
+
+  footerBar('WHEEL', 'MOVE', 'SIDE', 'CHANGE');
 }
 
+/* =========================================================================
+   STATS + TROPHIES (3 pages)
+   ========================================================================= */
 function drawStats() {
-  const pages = 2;
-  chrome('STATS & TROPHIES', 'PAGE ' + (S.statsIdx + 1) + '/' + pages);
+  headerBar('STATS & TROPHIES', (S.statsIdx + 1) + ' / 3', C.gold);
+
   if (S.statsIdx === 0) {
     const tiles = [
-      ['RUNS', G.stats.runs, C.ink],
-      ['WINS', G.stats.wins, C.gold],
-      ['BEST SCORE', G.stats.best, C.orange],
-      ['BEST STREAK', G.stats.bestStreak, C.green]
+      ['RUNS', G.stats.runs, C.ink, 0],
+      ['WINS', G.stats.wins, C.gold, 1],
+      ['BEST SCORE', G.stats.best, C.orange2, 2],
+      ['BEST STREAK', G.stats.bestStreak, C.green, 3]
     ];
     for (let i = 0; i < 4; i++) {
       const col = i % 2, row = Math.floor(i / 2);
-      const x = 6 + col * 116, y = 26 + row * 40;
-      panel(x, y, 112, 36, 'rgba(255,255,255,0.025)', C.line, 3);
-      txt(tiles[i][0], x + 7, y + 5, 5.2, C.faint, 'left', '700');
-      txt(String(tiles[i][1]), x + 7, y + 14, 15, tiles[i][2], 'left', '700');
+      const x = PAD + col * 114, y = 32 + row * 58;
+      card(x, y, 106, 52, { r: 7 });
+      T(tiles[i][0], x + 9, y + 7, 6.2, C.faint, 'left', '800', 0.8);
+      T(String(tiles[i][1]), x + 9, y + 18, 19, tiles[i][2], 'left', '700', 0.2, NUM);
+      ctx.fillStyle = tiles[i][2];
+      ctx.globalAlpha = 0.5;
+      rr(x + 84, y + 12, 12, 1.5, 0.75);
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
-    txt('RECENT RUNS', 8, 114, 6, C.dim, 'left', '700');
+
+    sectionLabel('RECENT RUNS', PAD, 156, C.faint);
     if (!G.history.length) {
-      txt('No runs yet. The AI is waiting.', 8, 128, 6.4, C.faint, 'left', '400');
+      T('No runs yet. The AI is waiting.', PAD, 172, 8, C.faint, 'left', '400');
     } else {
-      for (let i = 0; i < Math.min(5, G.history.length); i++) {
+      for (let i = 0; i < Math.min(4, G.history.length); i++) {
         const h = G.history[i];
-        const y = 126 + i * 20;
+        const y = 168 + i * 21;
+        card(PAD, y, CW, 18, { r: 5 });
         const mode = (MODE_LABEL[h.mode] || h.mode).replace('JUDGEMENT DAY', 'J-DAY').replace('LONE SURVIVOR', 'LONE');
-        const col = h.won ? C.gold : C.dim;
-        txt(mode, 8, y, 5.8, col, 'left', '700');
-        txt('#' + h.place, 122, y, 5.8, h.won ? C.gold : C.faint, 'right', '700');
-        txt(String(h.score), 200, y, 5.8, C.ink, 'right', '700');
-        txt(h.d, W - 8, y, 4.6, C.faint, 'right', '400');
+        T(mode, PAD + 9, y + 5.5, 7.2, h.won ? C.gold : C.dim, 'left', '700', 0.3);
+        T('#' + h.place, PAD + 92, y + 5.5, 7.2, h.won ? C.gold : C.faint, 'left', '700', 0.2, NUM);
+        T(String(h.score), PAD + 132, y + 5, 8.4, C.ink, 'right', '700', 0.2, NUM);
+        T(h.d.slice(5), W - PAD - 9, y + 6, 6.4, C.faint, 'right', '400', 0.2, NUM);
       }
     }
-    txt('WHEEL: SWITCH PAGE', W / 2, 246, 5.2, C.faint, 'center', '700');
+    T('WHEEL: NEXT PAGE', W / 2, 250, 6.6, C.faint, 'center', '700', 0.6);
   } else {
-    txt('TROPHIES  ' + Object.keys(G.ach).length + '/12', 8, 26, 8, C.gold, 'left', '700');
-    for (let i = 0; i < ACH.length; i++) {
-      const a = ACH[i];
-      const col = i % 2, row = Math.floor(i / 2);
-      const x = 6 + col * 116, y = 40 + row * 33;
-      const got = !!G.ach[a.id];
-      panel(x, y, 112, 29, got ? 'rgba(255,200,87,0.08)' : 'rgba(255,255,255,0.015)', got ? 'rgba(255,200,87,0.4)' : C.line, 3);
-      txt(got ? 'X' : '?', x + 6, y + 4, 7, got ? C.gold : C.faint, 'left', '700');
-      const nm = fitText(a.n, 92, 5.4, '700', 4);
-      txt(nm, x + 16, y + 4, 5.4, got ? C.ink : C.faint, 'left', '700');
-      para(a.d, x + 16, y + 13, 92, 4.6, got ? C.dim : C.faint, 5.6, '400', 2);
+    const page = S.statsIdx - 1;
+    const got = Object.keys(G.ach).length;
+    T('TROPHIES', PAD, 33, 11, C.gold, 'left', '800', 0.5);
+    T(got + ' / 12', W - PAD, 35, 8, C.gold, 'right', '700', 0.2, NUM);
+    const prog = got / 12;
+    rr(PAD, 49, CW, 3, 1.5);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.fill();
+    if (prog > 0) {
+      rr(PAD, 49, Math.max(3, CW * prog), 3, 1.5);
+      ctx.fillStyle = C.gold;
+      ctx.fill();
     }
-    txt('WHEEL: SWITCH PAGE', W / 2, 246, 5.2, C.faint, 'center', '700');
+
+    const list = ACH.slice(page * 6, page * 6 + 6);
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      const y = 58 + i * 32;
+      const has = !!G.ach[a.id];
+      card(PAD, y, CW, 29, { r: 6, tint: has ? ['rgba(255,202,122,0.08)', 'rgba(255,202,122,0.02)'] : null, stroke: has ? 'rgba(255,202,122,0.3)' : 'rgba(255,255,255,0.06)' });
+      ctx.beginPath();
+      ctx.arc(PAD + 17, y + 14.5, 7, 0, Math.PI * 2);
+      ctx.fillStyle = has ? 'rgba(255,202,122,0.18)' : 'rgba(255,255,255,0.04)';
+      ctx.fill();
+      T(has ? 'X' : '?', PAD + 17, y + 11, 6.6, has ? C.gold : C.faint, 'center', '800');
+      T(a.n, PAD + 31, y + 5, 8.0, has ? C.ink : C.faint, 'left', '800', 0.2);
+      T(a.d, PAD + 31, y + 15.5, 6.8, has ? C.dim : 'rgba(124,132,151,0.7)', 'left', '400');
+    }
+    T('WHEEL: NEXT PAGE', W / 2, 250, 6.6, C.faint, 'center', '700', 0.6);
   }
-  hint('SIDE: BACK TO MENU');
+
+  footerBar('WHEEL', 'PAGE', 'SIDE', 'BACK');
 }
 
+/* =========================================================================
+   ABOUT
+   ========================================================================= */
 function drawAbout() {
-  chrome('CREDITS', 'v1.0');
-  sigil(0, W / 2, 48, 16, 1);
-  txt('JUDGEMENT BY AI', W / 2, 72, 10, C.ink, 'center', '700');
-  txt('A party game where the judge is a machine', W / 2, 86, 5.4, C.dim, 'center', '400');
+  headerBar('CREDITS', 'V1.0', C.orange);
+  emblem(W / 2, 56, 17);
+  T('JUDGEMENT BY AI', W / 2, 84, 14, C.ink, 'center', '800', 0.6);
+  T('A party game where the judge is a machine', W / 2, 103, 7.8, C.dim, 'center', '400');
 
-  panel(6, 100, W - 12, 92, 'rgba(255,255,255,0.025)', C.line, 3);
-  txt('CREATED BY', 12, 106, 5, C.faint, 'left', '700');
-  txt('JEFF H.', 12, 115, 9, C.orange, 'left', '700');
-  txt('MR. GHOST / GHOSTLEGACYX', 12, 127, 5.8, C.ink, 'left', '700');
-  hline(12, W - 12, 139, C.line, 0.8);
-  txt('Built for Rabbit R1', 12, 145, 6, C.dim, 'left', '400');
-  txt('Inspired by Death by AI', 12, 155, 6, C.dim, 'left', '400');
-  txt('No AI models were harmed.', 12, 165, 6, C.faint, 'left', '400');
-  txt('Single file. No network. No mercy.', 12, 175, 6, C.faint, 'left', '400');
+  card(PAD, 118, CW, 82, { r: 7 });
+  sectionLabel('CREATED BY', PAD + 10, 124, C.faint);
+  T('JEFF H.', PAD + 10, 136, 13, C.orange, 'left', '800', 0.4);
+  T('MR. GHOST  /  GHOSTLEGACYX', PAD + 10, 154, 7.8, C.ink, 'left', '700', 0.3);
+  hair(PAD + 10, W - PAD - 10, 168, C.line, 0.9);
+  T('Built for the Rabbit R1', PAD + 10, 175, 8.1, C.dim, 'left', '400');
+  T('Inspired by Death by AI', PAD + 10, 187, 8.1, C.dim, 'left', '400');
 
-  txt('The AI judge is local and rule-based.', 8, 202, 6, C.dim, 'left', '400');
-  txt('It reads your words, not your soul.', 8, 212, 6, C.dim, 'left', '400');
-  txt('That is probably worse.', 8, 222, 6, C.orange, 'left', '700');
-  hint('SIDE: BACK TO MENU');
+  TP('The judge is local and rule-based. It reads your words, not your soul.', PAD, 208, CW, 8.0, C.dim, 10.6, '400', 2);
+  T('That is probably worse.', PAD, 232, 8.6, C.orange, 'left', '800', 0.4);
+  T('No network. No mercy.', W - PAD, 232, 6.8, C.faint, 'right', '700', 0.4);
+
+  footerBar('SIDE', 'BACK TO MENU', null, null);
 }
 
 /* =========================================================================
@@ -1753,15 +2088,23 @@ function modeShort(mode) {
 
 function playHeader() {
   const run = S.run;
-  ctx.fillStyle = '#0a0c12';
-  ctx.fillRect(0, 0, W, 19);
-  hline(0, W, 19, C.line, 0.9);
-  txt('R' + run.round + '/' + run.totalRounds, 7, 6, 6, C.dim, 'left', '700');
-  roundPips(W / 2, 9.5, run.round, run.totalRounds, run.bonus);
+  const g = ctx.createLinearGradient(0, 0, 0, HEAD);
+  g.addColorStop(0, 'rgba(255,255,255,0.045)');
+  g.addColorStop(1, 'rgba(255,255,255,0.008)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, HEAD);
+  hair(0, W, HEAD - 0.5, C.line, 0.9);
+
+  T('ROUND', PAD, 4.8, 6.2, C.faint, 'left', '800', 0.8);
+  T(String(run.round), PAD, 11, 10.4, C.ink, 'left', '700', 0.2, NUM);
+  T('OF ' + run.totalRounds, PAD + 13, 14.5, 6.2, C.faint, 'left', '700', 0.4);
+
+  roundPips(W / 2 + 18, 14.5, run.round, run.totalRounds, run.bonus);
+
   if (run.bonus) {
-    tag('x' + run.mult, W - 8 - 20, 4, 'rgba(255,200,87,0.16)', C.gold, 5.4);
+    chip('x' + run.mult + ' PTS', W - PAD - 42, 6, C.gold, 'rgba(255,202,122,0.14)', 6.0);
   } else {
-    txt(modeShort(run.mode), W - 7, 6, 5.4, C.faint, 'right', '700');
+    T(modeShort(run.mode), W - PAD, 9.5, 6.4, C.faint, 'right', '800', 0.5);
   }
 }
 
@@ -1772,25 +2115,12 @@ function bannedIn(text) {
 }
 
 function drawWrappedTail(text, x, y, w, size, lh, color, maxLines, weight) {
-  const lines = wrap(text, w, size, weight || '400');
+  const lines = TW(text, w, size, weight || '400');
   const start = Math.max(0, lines.length - maxLines);
   for (let i = start; i < lines.length; i++) {
-    txt(lines[i], x, y + (i - start) * lh, size, color, 'left', weight || '400');
+    T(lines[i], x, y + (i - start) * lh, size, color, 'left', weight || '400');
   }
   return lines.length - start;
-}
-
-function meter(x, y, w, h) {
-  const n = 22;
-  const bw = w / n;
-  const lvl = S.run && S.run.listening ? Math.max(0.06, Voice.level) : 0;
-  for (let i = 0; i < n; i++) {
-    const wave = Math.abs(Math.sin(GT * 7 + i * 0.9)) * 0.45 + Math.abs(Math.sin(GT * 3.1 + i * 0.31)) * 0.55;
-    const bh = 1 + wave * (h - 1) * lvl;
-    const col = lvl > 0.02 ? (i > n * 0.72 ? C.orange : C.green) : C.line;
-    ctx.fillStyle = col;
-    ctx.fillRect(x + i * bw, y + (h - bh) / 2, Math.max(1, bw - 1), bh);
-  }
 }
 
 /* =========================================================================
@@ -1799,40 +2129,32 @@ function meter(x, y, w, h) {
 function drawIntro() {
   const run = S.run, sc = run.scenario;
   playHeader();
-  txt('THE AI HAS A SCENARIO', 8, 26, 5.2, C.faint, 'left', '700');
+  sectionLabel('THE SCENARIO', PAD, 34, C.orange);
 
-  panel(6, 35, W - 12, 94, 'rgba(255,255,255,0.028)', C.line, 3);
-  txt('"', 10, 38, 20, C.orange, 'left', '700');
-  const ch = Math.floor(run.t * 46);
-  const shown = sc.t.slice(0, ch);
-  para(shown, 13, 50, W - 26, 9, C.ink, 11.6, '700', 6);
+  card(PAD, 46, CW, 116, { r: 8 });
+  T('"', PAD + 8, 49, 24, 'rgba(255,106,61,0.55)', 'left', '800');
+  const ch = Math.floor(run.t * 52);
+  TP(sc.t.slice(0, ch), PAD + 13, 64, CW - 26, 10.6, C.ink, 13.6, '700', 7);
   if (ch < sc.t.length) {
     ctx.fillStyle = C.orange;
-    const h = 9;
-    const lx = 13 + Math.min(1, (ch % 20) / 20) * 4;
-    ctx.fillRect(lx, 140, 4, 1.5);
+    ctx.fillRect(PAD + 13, 152, 5, 2);
   }
 
-  const narr = run.narration;
-  if (narr) {
-    const nt = Math.min(narr.length, Math.floor(run.t * 55));
-    para(narr.slice(0, nt), 8, 138, W - 16, 6.4, C.dim, 8.2, '400', 3);
+  if (run.narration) {
+    const nt = Math.min(run.narration.length, Math.floor(run.t * 58));
+    TP(run.narration.slice(0, nt), PAD, 170, CW, 8.0, C.dim, 10.4, '400', 2);
   }
 
   if (run.bonus) {
-    panel(6, 162, W - 12, 22, 'rgba(255,200,87,0.10)', 'rgba(255,200,87,0.4)', 3);
-    txt('BONUS ROUND', 12, 167, 6, C.gold, 'left', '700');
-    txt('POINTS x' + run.mult, W - 12, 167, 6, C.gold, 'right', '700');
+    card(PAD, 192, CW, 24, { r: 6, tint: ['rgba(255,202,122,0.12)', 'rgba(255,202,122,0.03)'], stroke: 'rgba(255,202,122,0.32)' });
+    T('BONUS ROUND', PAD + 10, 198, 7.8, C.gold, 'left', '800', 0.5);
+    T('POINTS x' + run.mult, W - PAD - 10, 198, 8.2, C.gold, 'right', '800', 0.3);
+  } else {
+    T('60 SECONDS. ONE ANSWER.', W / 2, 199, 8.0, C.dim, 'center', '700', 0.7);
   }
 
-  txt('60 SECONDS. ONE ANSWER.', W / 2, 200, 6.2, C.dim, 'center', '700');
-  txt('MAKE IT COUNT.', W / 2, 209, 5.4, C.faint, 'center', '400');
-
-  ctx.globalAlpha = blink(1, 0.3);
-  txt('SIDE: FACE IT', W / 2, 226, 9, C.orange, 'center', '700');
-  ctx.globalAlpha = 1;
-
-  hint('SIDE: BEGIN THE ROUND');
+  button('FACE IT', 220, { w: 178, h: 27, size: 9.0 });
+  footerBar('SIDE', 'BEGIN THE ROUND', null, null);
 }
 
 /* =========================================================================
@@ -1842,59 +2164,99 @@ function drawAnswer() {
   const run = S.run, sc = run.scenario;
   playHeader();
 
-  panel(6, 24, W - 12, 56, 'rgba(255,255,255,0.025)', C.line, 3);
-  para(sc.t, 11, 29, W - 22, 6.3, C.dim, 7.8, '400', 4);
+  card(PAD, 31, CW, 48, { r: 6 });
+  TP(sc.t, PAD + 8, 36, CW - 16, 7.8, C.dim, 10, '400', 3);
+  if (run.showHints) {
+    const y0 = 54;
+    T('HINTS — KEYWORDS', PAD + 8, y0, 6.0, C.gold, 'left', '800', 0.6);
+    const kw = sc.k.slice(0, 6);
+    let x = PAD + 8;
+    const y = y0 + 9;
+    for (let i = 0; i < kw.length; i++) {
+      const s = kw[i];
+      const w = TM(s, 6.2, '700') + 8;
+      rr(x, y, w, 10, 3);
+      ctx.fillStyle = 'rgba(255,202,122,0.08)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,202,122,0.25)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      T(s, x + 4, y + 2, 6.2, C.gold, 'left', '700');
+      x += w + 4;
+      if (x > W - PAD - 20) { x = PAD + 8; }
+    }
+  }
 
-  // timer
   const frac = clamp(run.timeLeft / 60, 0, 1);
   const tcol = frac > 0.5 ? C.green : (frac > 0.22 ? C.gold : C.red);
-  txt('TIME', 8, 87, 5, C.faint, 'left', '700');
   const secs = Math.max(0, Math.ceil(run.timeLeft));
-  txt('0:' + pad2(secs), W - 8, 84, 8, tcol, 'right', '700');
-  panel(30, 89, W - 38, 5, '#141821', null, 2);
+  T('TIME LEFT', PAD, 86, 6.2, C.faint, 'left', '800', 0.8);
+  T('0:' + pad2(secs), W - PAD, 82, 12.6, tcol, 'right', '700', 0.2, NUM);
+  rr(PAD, 100, CW, 4, 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  ctx.fill();
   if (frac > 0.001) {
-    panel(30, 89, Math.max(2, (W - 38) * frac), 5, tcol, null, 2);
+    ctx.save();
+    ctx.shadowColor = tcol;
+    ctx.shadowBlur = 6;
+    rr(PAD, 100, Math.max(3, CW * frac), 4, 2);
+    ctx.fillStyle = tcol;
+    ctx.fill();
+    ctx.restore();
   }
 
-  // answer box
-  panel(6, 101, W - 12, 96, 'rgba(255,255,255,0.03)', run.listening ? 'rgba(255,90,43,0.6)' : C.line, 3);
-  txt('YOUR ANSWER', 11, 105, 5, C.faint, 'left', '700');
-  txt(String(answerComposed(run).length) + ' CH', W - 11, 105, 4.6, C.faint, 'right', '400');
-
+  card(PAD, 110, CW, 90, { r: 8, stroke: run.listening ? 'rgba(255,106,61,0.6)' : null });
+  T('YOUR ANSWER', PAD + 9, 115, 6.0, C.faint, 'left', '800', 0.8);
   const composed = answerComposed(run);
-  if (composed) {
-    drawWrappedTail(composed, 11, 114, W - 22, 7.2, 9.4, C.ink, 8, '400');
-  } else if (run.listening) {
-    ctx.globalAlpha = blink(1, 0.4);
-    txt(run.voiceInterim || 'LISTENING...', 11, 116, 7.2, C.orange, 'left', '700');
-    ctx.globalAlpha = 1;
-  } else {
-    txt('HOLD SIDE AND SPEAK.', 11, 118, 7.2, C.dim, 'left', '700');
-    txt('Or tap SIDE to build one.', 11, 130, 5.6, C.faint, 'left', '400');
-  }
-  meter(11, 181, W - 22, 12);
-
-  // status
-  const bn = bannedIn(composed);
   if (run.listening) {
     ctx.fillStyle = C.red;
-    ctx.beginPath(); ctx.arc(10, 208, 2.2, 0, Math.PI * 2); ctx.fill();
-    txt('RECORDING - RELEASE TO STOP', 17, 204, 6, C.red, 'left', '700');
-  } else if (bn) {
-    txt('FORBIDDEN WORD: ' + bn.toUpperCase(), 9, 204, 6.4, C.red, 'left', '700');
-    txt('The AI will kill you for it.', 9, 213, 5.2, C.faint, 'left', '400');
-  } else if (composed) {
-    txt('SIDE: REVIEW    HOLD: KEEP TALKING', 9, 204, 5.6, C.green, 'left', '700');
-    txt('Tap SIDE when you are done.', 9, 213, 5.2, C.faint, 'left', '400');
+    ctx.beginPath();
+    ctx.arc(W - PAD - 24, 118.5, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    T('REC', W - PAD - 18, 115, 6.2, C.red, 'left', '800', 0.5);
   } else {
-    txt('HOLD SIDE: SPEAK', 9, 204, 6, C.orange, 'left', '700');
-    txt('TAP SIDE: PHRASE FORGE', 9, 213, 5.2, C.faint, 'left', '400');
+    T(String(composed.length) + ' CH', W - PAD - 9, 115, 6.2, C.faint, 'right', '400', 0.2, NUM);
   }
 
-  txt('FORBIDDEN: SURVIVE / WIN / SAFE / SAFETY / ALIVE', W / 2, 235, 4.8, C.faint, 'center', '700');
-  txt('THE AI IS LISTENING.', W / 2, 244, 5, C.faint, 'center', '400');
+  if (composed) {
+    drawWrappedTail(composed, PAD + 9, 126, CW - 18, 9.0, 11.6, C.ink, 6, '400');
+  } else if (run.listening) {
+    ctx.globalAlpha = blink(1, 0.4);
+    T(run.voiceInterim || 'LISTENING...', PAD + 9, 126, 9.0, C.orange, 'left', '700');
+    ctx.globalAlpha = 1;
+  } else {
+    T('HOLD SIDE AND SPEAK.', PAD + 9, 126, 9.0, C.dim, 'left', '700', 0.3);
+    T('Or tap SIDE to build one.', PAD + 9, 140, 7.8, C.faint, 'left', '400');
+  }
 
-  hint(run.listening ? 'RELEASE SIDE WHEN YOU FINISH' : 'HOLD SIDE: SPEAK    TAP: FORGE');
+  if (run.listening) {
+    const lv = Math.max(0.045, Voice.level);
+    rr(PAD + 9, 195, CW - 18, 2.5, 1.25);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fill();
+    rr(PAD + 9, 195, Math.max(4, (CW - 18) * lv), 2.5, 1.25);
+    ctx.fillStyle = C.orange;
+    ctx.fill();
+  }
+
+  const bn = bannedIn(composed);
+  if (run.listening) {
+    ctx.globalAlpha = blink(1, 0.4);
+    T('RECORDING / RELEASE SIDE TO STOP', W / 2, 207, 7.0, C.red, 'center', '800', 0.4);
+    ctx.globalAlpha = 1;
+  } else if (bn) {
+    card(PAD, 206, CW, 34, { r: 6, tint: ['rgba(255,68,99,0.12)', 'rgba(255,68,99,0.03)'], stroke: 'rgba(255,68,99,0.4)' });
+    T('FORBIDDEN WORD: ' + bn.toUpperCase(), PAD + 9, 211, 8.2, C.red, 'left', '800', 0.3);
+    T('The AI will kill you for it.', PAD + 9, 224, 7.2, C.faint, 'left', '400');
+  } else if (composed) {
+    T('READY TO REVIEW', PAD, 210, 6.4, C.green, 'left', '800', 0.8);
+    T('Tap SIDE to submit. Hold to keep talking.', PAD, 221, 7.8, C.dim, 'left', '400');
+  } else {
+    T('HOLD SIDE: SPEAK', PAD, 209, 8.6, C.orange, 'left', '800', 0.4);
+    T('TAP SIDE: PHRASE FORGE', PAD, 223, 7.2, C.faint, 'left', '400', 0.3);
+  }
+
+  footerBar(run.listening ? 'RELEASE' : 'HOLD', run.listening ? 'TO STOP' : 'SPEAK', 'TAP', composed ? 'REVIEW' : 'FORGE');
 }
 
 /* =========================================================================
@@ -1903,47 +2265,47 @@ function drawAnswer() {
 function drawConfirm() {
   const run = S.run;
   playHeader();
-  txt('REVIEW YOUR ANSWER', 8, 26, 8, C.ink, 'left', '700');
-  txt('THE AI WILL NOT ASK TWICE.', 8, 37, 5.2, C.faint, 'left', '700');
+  T('REVIEW', PAD, 32, 12, C.ink, 'left', '800', 0.5);
+  T('THE AI WILL NOT ASK TWICE', W - PAD, 37, 6.6, C.faint, 'right', '800', 0.5);
 
-  panel(6, 47, W - 12, 104, 'rgba(255,255,255,0.03)', C.line, 3);
-  const a = run.answer;
-  drawWrappedTail(a, 11, 53, W - 22, 7.2, 9.6, C.ink, 10, '400');
+  card(PAD, 54, CW, 112, { r: 8 });
+  T('YOUR ANSWER', PAD + 9, 59, 6.0, C.faint, 'left', '800', 0.8);
+  drawWrappedTail(run.answer, PAD + 9, 70, CW - 18, 9.0, 11.8, C.ink, 8, '400');
 
-  const words = wordsOf(a).length;
-  txt(words + ' WORDS', 8, 158, 5.4, C.dim, 'left', '700');
-  txt(a.length + ' CHARS', W - 8, 158, 5.4, C.dim, 'right', '700');
-
-  const bn = bannedIn(a);
-  if (bn) {
-    panel(6, 168, W - 12, 30, 'rgba(255,45,85,0.10)', 'rgba(255,45,85,0.55)', 3);
-    txt('FORBIDDEN WORD: ' + bn.toUpperCase(), 12, 173, 7, C.red, 'left', '700');
-    txt('Hold SIDE to record again.', 12, 184, 5.4, C.dim, 'left', '400');
-  } else {
-    panel(6, 168, W - 12, 30, 'rgba(93,242,160,0.08)', 'rgba(93,242,160,0.35)', 3);
-    txt('NO FORBIDDEN WORDS DETECTED', 12, 173, 6, C.green, 'left', '700');
-    txt('That does not mean it will work.', 12, 184, 5.4, C.faint, 'left', '400');
+  const words = wordsOf(run.answer).length;
+  T(words + ' WORDS', PAD, 173, 6.8, C.dim, 'left', '700', 0.3, NUM);
+  T(run.answer.length + ' CHARS', W - PAD, 173, 6.8, C.dim, 'right', '700', 0.3, NUM);
+  if (run.usedForge) {
+    const tag = 'BUILT IN THE FORGE';
+    const tw2 = TM(tag, 6.2, '700') + 10;
+    chip(tag, (W - tw2) / 2, 168, C.blue, 'rgba(102,201,255,0.1)', 6.2);
   }
 
-  ctx.globalAlpha = blink(1, 0.45);
-  txt('SIDE: SUBMIT TO THE AI', W / 2, 210, 8, C.orange, 'center', '700');
-  ctx.globalAlpha = 1;
-  txt('HOLD SIDE: RECORD AGAIN', W / 2, 226, 5.4, C.faint, 'center', '700');
+  const bn = bannedIn(run.answer);
+  if (bn) {
+    card(PAD, 186, CW, 34, { r: 6, tint: ['rgba(255,68,99,0.12)', 'rgba(255,68,99,0.03)'], stroke: 'rgba(255,68,99,0.4)' });
+    T('FORBIDDEN WORD: ' + bn.toUpperCase(), PAD + 9, 191, 8.2, C.red, 'left', '800', 0.3);
+    T('Hold SIDE to record again.', PAD + 9, 204, 7.0, C.faint, 'left', '400');
+  } else {
+    card(PAD, 186, CW, 34, { r: 6, tint: ['rgba(79,227,160,0.09)', 'rgba(79,227,160,0.02)'], stroke: 'rgba(79,227,160,0.28)' });
+    T('NO FORBIDDEN WORDS', PAD + 9, 191, 8.2, C.green, 'left', '800', 0.3);
+    T('That does not mean it will work.', PAD + 9, 204, 7.0, C.faint, 'left', '400');
+  }
 
-  if (run.usedForge) txt('BUILT IN THE FORGE', W / 2, 240, 4.6, C.blue, 'center', '700');
-  hint('SIDE: SUBMIT    HOLD: RECORD AGAIN');
+  button('SUBMIT TO THE AI', 228, { w: 196, h: 26, size: 8.6 });
+  footerBar('SIDE', 'SUBMIT', 'HOLD', 'RECORD');
 }
 
 /* =========================================================================
-   PLAY - phrase forge
+   PLAY - forge
    ========================================================================= */
 function drawForge() {
   const run = S.run;
   const o = forgeOpts(run.scenario);
   const f = run.forge;
   playHeader();
-  txt('PHRASE FORGE', 8, 24, 9, C.blue, 'left', '700');
-  txt('NO MIC. STILL DEADLY.', 8, 36, 5.2, C.faint, 'left', '700');
+  T('PHRASE FORGE', PAD, 32, 11, C.blue, 'left', '800', 0.5);
+  T('NO MIC. STILL DEADLY.', W - PAD, 36, 6.6, C.faint, 'right', '800', 0.4);
 
   const labels = ['ACTION', 'TOOL', 'METHOD', 'ESCAPE', 'FLAIR'];
   const keys = ['open', 'tool', 'act', 'move', 'twist'];
@@ -1951,22 +2313,22 @@ function drawForge() {
     const y = 50 + i * 27;
     const sel = i === f.slot;
     const val = o[keys[i]][f.idx[i] % o[keys[i]].length];
+    card(PAD, y, CW, 24, { selected: sel, r: 6 });
+    if (sel) { ctx.fillStyle = C.blue; rr(PAD + 1.5, y + 5, 2.5, 14, 1.25); ctx.fill(); }
+    T(labels[i], PAD + 13, y + 3, 6.0, sel ? C.blue : C.faint, 'left', '800', 0.7);
+    const sz = fit(val, CW - 26, 7.8, '400', 6.2);
+    T(val, PAD + 13, y + 11, sz, sel ? C.ink : C.dim, 'left', '400');
     if (sel) {
-      panel(6, y, W - 12, 23, 'rgba(91,200,255,0.09)', 'rgba(91,200,255,0.55)', 3);
-      ctx.fillStyle = C.blue;
-      ctx.fillRect(6, y + 2, 2.5, 19);
+      chevron(W - 16, y + 12, -1, 'rgba(102,201,255,0.6)');
+      chevron(W - 10, y + 12, 1, 'rgba(102,201,255,0.6)');
     }
-    txt(labels[i], 13, y + 3, 4.8, sel ? C.blue : C.faint, 'left', '700');
-    const sz = fitText(val, W - 26, 7, '400', 4.6);
-    txt(val, 13, y + 11, sz, sel ? C.ink : C.dim, 'left', '400');
   }
 
-  panel(6, 190, W - 12, 56, 'rgba(255,255,255,0.03)', C.line, 3);
-  txt('PREVIEW', 11, 194, 4.8, C.faint, 'left', '700');
-  para(forgeText(run), 11, 202, W - 22, 6.2, C.ink, 8, '400', 4);
+  card(PAD, 190, CW, 56, { r: 7 });
+  T('PREVIEW', PAD + 8, 195, 6.2, C.faint, 'left', '800', 0.8);
+  TP(forgeText(run), PAD + 8, 205, CW - 16, 8.0, C.ink, 10.2, '400', 4);
 
-  txt('WHEEL: CHANGE PART   SIDE: NEXT', W / 2, 252, 5.2, C.dim, 'center', '700');
-  hint(f.slot === 4 ? 'SIDE: SUBMIT THE ANSWER' : 'HOLD SIDE: SWITCH TO VOICE');
+  footerBar('WHEEL', 'CHANGE PART', 'SIDE', f.slot === 4 ? 'BUILD ANSWER' : 'NEXT PART');
 }
 
 /* =========================================================================
@@ -1981,33 +2343,47 @@ const JUDGE_LOG = [
 function drawJudging() {
   const run = S.run;
   playHeader();
-  const dots = '.'.repeat(1 + Math.floor(run.t * 3) % 3);
-  txt('JUDGING' + dots, W / 2, 34, 15, C.orange, 'center', '700');
-  txt('THE AI IS READING YOUR EXCUSE', W / 2, 54, 5.4, C.faint, 'center', '700');
+
+  T('JUDGING' + '.'.repeat(1 + Math.floor(run.t * 3) % 3), W / 2, 38, 19, C.orange, 'center', '800', 1.2);
+  T('THE AI IS READING YOUR EXCUSE', W / 2, 63, 6.8, C.faint, 'center', '800', 0.8);
+
+  const pw = 120;
+  rr(W / 2 - pw / 2, 76, pw, 3, 1.5);
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  ctx.fill();
+  const prog = (run.t / 2.7) % 1;
+  ctx.fillStyle = C.orange;
+  ctx.save();
+  ctx.shadowColor = C.orange;
+  ctx.shadowBlur = 6;
+  rr(W / 2 - pw / 2, 76, Math.max(4, pw * prog), 3, 1.5);
+  ctx.fill();
+  ctx.restore();
 
   const n = Math.min(5, Math.floor(run.t / 0.34));
   for (let i = 0; i < n; i++) {
     const li = (i * 5 + Math.floor(run.seed / 7)) % JUDGE_LOG.length;
-    const y = 72 + i * 12;
-    txt('> ' + JUDGE_LOG[li], 10, y, 5.8, i === n - 1 ? C.green : C.dim, 'left', '400');
+    T('> ' + JUDGE_LOG[li], PAD + 4, 90 + i * 12.5, 7.0, i === n - 1 ? C.green : C.faint, 'left', '400', 0, NUM);
   }
 
   for (let i = 0; i < run.players.length; i++) {
     const p = run.players[i];
-    const y = 148 + i * 24;
+    const y = 158 + i * 23;
     const active = Math.floor(run.t * 6) % run.players.length === i;
-    sigil(p.av, 20, y + 6, 7, p.isYou ? 1 : 0.7);
-    txt(p.name, 34, y + 1, 6.6, p.isYou ? C.ink : C.dim, 'left', '700');
-    txt(active ? 'ANALYZING' : 'WAITING', W - 10, y + 1, 5, active ? C.orange : C.faint, 'right', '700');
+    sigil(p.av, PAD + 11, y + 9, 7, p.isYou ? 1 : 0.62);
+    T(p.name, PAD + 25, y + 4, 8.4, p.isYou ? C.ink : C.dim, 'left', '800', 0.3);
+    T(active ? 'ANALYZING' : 'WAITING', W - PAD, y + 5, 6.2, active ? C.orange : C.faint, 'right', '800', 0.5);
     if (active) {
-      const w = (Math.sin(run.t * 10) * 0.5 + 0.5) * 40 + 6;
+      const w = (Math.sin(run.t * 10) * 0.5 + 0.5) * 52 + 6;
       ctx.fillStyle = C.orange;
-      ctx.globalAlpha = 0.6;
-      ctx.fillRect(34, y + 12, w, 2);
+      ctx.globalAlpha = 0.55;
+      rr(PAD + 25, y + 15, w, 1.5, 0.75);
+      ctx.fill();
       ctx.globalAlpha = 1;
     }
   }
-  hint('SIDE: SKIP ANIMATION');
+
+  footerBar('SIDE', 'SKIP', null, null);
 }
 
 /* =========================================================================
@@ -2017,56 +2393,52 @@ function drawVerdict() {
   const run = S.run;
   const p = run.verdicts[run.vi];
   playHeader();
-  txt('CONTESTANT ' + (run.vi + 1) + ' OF ' + run.verdicts.length, 8, 24, 5.2, C.faint, 'left', '700');
-  txt('VERDICT', W - 8, 23, 6, p.pass ? C.green : C.red, 'right', '700');
 
-  sigil(p.av, 24, 50, 12, 1, !p.pass);
-  const nm = fitText(p.name, 110, 11, '700', 6);
-  txt(nm, 44, 39, 11, p.isYou ? C.ink : C.dim, 'left', '700');
-  txt(p.isYou ? 'YOU' : 'RIVAL CONTESTANT', 44, 55, 4.8, C.faint, 'left', '700');
-  txt('SCORE ' + p.score, 44, 64, 5.2, p.pass ? C.green : C.red, 'left', '700');
-  txt(String(p.points), W - 8, 42, 15, C.gold, 'right', '700');
-  txt('PTS', W - 8, 60, 4.8, C.faint, 'right', '700');
+  T('CONTESTANT ' + (run.vi + 1) + ' OF ' + run.verdicts.length, PAD, 32, 6.2, C.faint, 'left', '800', 0.7);
+  T('VERDICT', W - PAD, 32, 6.2, p.pass ? C.green : C.red, 'right', '800', 0.7);
+
+  sigil(p.av, PAD + 16, 58, 13, 1, !p.pass);
+  const nm = fit(p.name, 104, 12, '800', 6);
+  T(nm, PAD + 36, 44, nm, p.isYou ? C.ink : C.dim, 'left', '800', 0.4);
+  T(p.isYou ? 'YOU' : 'RIVAL CONTESTANT', PAD + 36, 59, 6.2, C.faint, 'left', '800', 0.6);
+  T('SCORE ' + p.score, PAD + 36, 70, 6.8, p.pass ? C.green : C.red, 'left', '700', 0.2, NUM);
+
+  T(String(p.points), W - PAD, 44, 15, C.gold, 'right', '700', 0.2, NUM);
+  T('PTS', W - PAD, 62, 6.0, C.faint, 'right', '800', 0.8);
 
   const bc = p.pass ? C.green : C.red;
-  panel(6, 76, W - 12, 28, p.pass ? 'rgba(93,242,160,0.12)' : 'rgba(255,45,85,0.14)', bc, 3);
-  const label = p.pass ? (run.mode === 'lone' ? 'THE ONE SPARED' : 'SURVIVED') : 'DIED';
-  spaced(label, W / 2, 82, 14, bc, 1.2, 'center', '700');
-
-  panel(6, 110, W - 12, 58, 'rgba(255,255,255,0.03)', C.line, 3);
-  txt('THE ANSWER', 11, 114, 4.6, C.faint, 'left', '700');
-  if (!p.answer) {
-    txt('...nothing. Absolutely nothing.', 11, 124, 6.2, C.red, 'left', '700');
-  } else {
-    para('"' + p.answer + '"', 11, 123, W - 22, 6.2, C.ink, 8, '400', 5);
+  card(PAD, 84, CW, 34, { r: 7, tint: p.pass ? ['rgba(79,227,160,0.14)', 'rgba(79,227,160,0.03)'] : ['rgba(255,68,99,0.16)', 'rgba(255,68,99,0.03)'], stroke: p.pass ? 'rgba(79,227,160,0.35)' : 'rgba(255,68,99,0.35)' });
+  const label = p.pass ? (run.mode === 'lone' ? 'SPARED' : 'SURVIVED') : 'DIED';
+  T(label, PAD + 12, 92, 16.5, bc, 'left', '800', 1.6);
+  if (p.pass && p.gained > 0) {
+    T('+' + p.gained, W - PAD - 12, 91, 10, C.gold, 'right', '800', 0.3, NUM);
+    T(run.bonus ? 'x' + run.mult : 'POINTS', W - PAD - 12, 104, 6.0, C.faint, 'right', '800', 0.6);
   }
 
-  const q = p.quip || '';
-  para(q, 8, 174, W - 16, 7, p.pass ? C.green : C.red, 9, '700', 2);
+  card(PAD, 124, CW, 62, { r: 7 });
+  T('THE ANSWER', PAD + 8, 129, 6.2, C.faint, 'left', '800', 0.8);
+  if (!p.answer) {
+    T('...nothing. Absolutely nothing.', PAD + 8, 140, 8.0, C.red, 'left', '700');
+  } else {
+    TP('"' + p.answer + '"', PAD + 8, 139, CW - 16, 8.0, C.ink, 10.2, '400', 4);
+  }
 
-  let tx = 8;
+  TP(p.quip || '', PAD, 192, CW, 8.2, p.pass ? C.green : C.red, 10.6, '700', 2);
+
+  let tx = PAD;
   for (let i = 0; i < p.tags.length; i++) {
     const t = p.tags[i];
-    const col = t.indexOf('FORBIDDEN') === 0 ? C.red : (t === 'CHEESE (WORKS)' ? C.gold : C.dim);
-    const bg = t.indexOf('FORBIDDEN') === 0 ? 'rgba(255,45,85,0.14)' : 'rgba(255,255,255,0.05)';
-    tx += tag(t, tx, 198, bg, col, 4.6) + 4;
+    if (tx > W - PAD - 20) break;
+    const fg = t.indexOf('FORBIDDEN') === 0 ? C.red : (t.indexOf('CHEESE') === 0 ? C.gold : C.dim);
+    const bg = t.indexOf('FORBIDDEN') === 0 ? 'rgba(255,68,99,0.12)' : 'rgba(255,255,255,0.05)';
+    const w = chip(t, tx, 218, fg, bg, 6.0);
+    tx += w + 4;
   }
 
-  if (p.pass && p.gained > 0) {
-    ctx.globalAlpha = blink(1, 0.6);
-    txt('+' + p.gained + ' POINTS' + (run.bonus ? '  (x' + run.mult + ')' : ''), W / 2, 214, 8, C.gold, 'center', '700');
-    ctx.globalAlpha = 1;
-  } else {
-    txt(p.pass ? 'NO POINTS AWARDED' : 'YOUR SCORE IS IRRELEVANT NOW', W / 2, 215, 5.6, C.faint, 'center', '700');
-  }
+  T(p.isYou ? 'THAT IS YOU.' : 'THE AI HAS MOVED ON.', PAD, 236, 6.4, p.isYou ? C.orange2 : C.faint, 'left', '800', 0.5);
+  T('+' + p.gained + ' PTS', W - PAD, 235, 8.0, p.gained > 0 ? C.gold : C.faint, 'right', '800', 0.2, NUM);
 
-  if (p.isYou) {
-    txt('THAT IS YOU.', W / 2, 232, 5.4, C.orange, 'center', '700');
-  } else {
-    txt(run.mode === 'lone' ? 'ONLY ONE IS SPARED EACH ROUND.' : 'THE AI HAS MOVED ON.', W / 2, 232, 5, C.faint, 'center', '400');
-  }
-
-  hint(run.vi < run.verdicts.length - 1 ? 'SIDE: NEXT VERDICT' : 'SIDE: STANDINGS');
+  footerBar('SIDE', run.vi < run.verdicts.length - 1 ? 'NEXT VERDICT' : 'STANDINGS', null, null);
 }
 
 /* =========================================================================
@@ -2076,48 +2448,45 @@ function drawStandings() {
   const run = S.run;
   const order = sortedPlayers(run);
   playHeader();
-  txt('STANDINGS', 8, 25, 10, C.ink, 'left', '700');
-  txt('AFTER ROUND ' + run.round, W - 8, 28, 5.4, C.faint, 'right', '700');
 
-  hline(8, W - 8, 42, C.line, 0.9);
-  txt('#', 10, 46, 4.6, C.faint, 'left', '700');
-  txt('CONTESTANT', 26, 46, 4.6, C.faint, 'left', '700');
-  txt('PTS', W - 10, 46, 4.6, C.faint, 'right', '700');
+  T('STANDINGS', PAD, 32, 12, C.ink, 'left', '800', 0.5);
+  T('AFTER ROUND ' + run.round, W - PAD, 37, 6.6, C.faint, 'right', '800', 0.4);
+
+  T('#', PAD + 2, 50, 6.0, C.faint, 'left', '800', 0.5);
+  T('CONTESTANT', PAD + 20, 50, 6.0, C.faint, 'left', '800', 0.5);
+  T('PTS', W - PAD - 2, 50, 6.0, C.faint, 'right', '800', 0.5);
 
   for (let i = 0; i < order.length; i++) {
     const p = order[i];
-    const y = 56 + i * 34;
-    if (p.isYou) panel(6, y - 2, W - 12, 31, 'rgba(255,90,43,0.08)', 'rgba(255,90,43,0.4)', 3);
-    txt(String(i + 1), 12, y + 6, 9, p.isYou ? C.orange : C.dim, 'left', '700');
-    sigil(p.av, 34, y + 11, 9, p.isYou ? 1 : 0.7, p.deaths > 0 && p.survives === 0);
-    const nm = fitText(p.name + (p.isYou ? ' (YOU)' : ''), 92, 7, '700', 5);
-    txt(nm, 48, y + 3, 7, p.isYou ? C.ink : C.dim, 'left', '700');
+    const y = 58 + i * 36;
+    if (p.isYou) card(PAD, y, CW, 33, { r: 6, tint: ['rgba(255,106,61,0.10)', 'rgba(255,106,61,0.03)'], stroke: 'rgba(255,106,61,0.3)' });
+    T(String(i + 1), PAD + 6, y + 9, 10, p.isYou ? C.orange : C.faint, 'left', '700', 0.2, NUM);
+    sigil(p.av, PAD + 26, y + 16, 8.5, p.isYou ? 1 : 0.65, p.deaths > 0 && p.survives === 0);
+    const nm = fit(p.name + (p.isYou ? ' (YOU)' : ''), 96, 8.2, '700', 5.2);
+    T(nm, PAD + 42, y + 6, nm, p.isYou ? C.ink : C.dim, 'left', '700', 0.2);
     for (let k = 0; k < run.round; k++) {
-      const px = 50 + k * 8;
-      const ok = k < p.survives;
+      const px = PAD + 44 + k * 9;
       ctx.beginPath();
-      ctx.arc(px, y + 18, 1.9, 0, Math.PI * 2);
-      ctx.fillStyle = ok ? C.green : C.line;
+      ctx.arc(px, y + 24, 1.8, 0, Math.PI * 2);
+      ctx.fillStyle = k < p.survives ? C.green : 'rgba(255,255,255,0.12)';
       ctx.fill();
     }
-    txt(String(p.points), W - 10, y + 4, 10, p.isYou ? C.gold : C.ink, 'right', '700');
+    T(String(p.points), W - PAD - 6, y + 7, 11, p.isYou ? C.gold : C.ink, 'right', '700', 0.2, NUM);
   }
 
-  const y0 = 202;
-  panel(6, y0, W - 12, 34, 'rgba(255,255,255,0.025)', C.line, 3);
+  card(PAD, 206, CW, 40, { r: 7 });
   if (run.bonus) {
-    txt('BONUS ROUND: POINTS x' + run.mult, 12, y0 + 5, 6, C.gold, 'left', '700');
-    txt('Everyone earned at the same rate.', 12, y0 + 16, 5, C.faint, 'left', '400');
+    sectionLabel('BONUS ROUND', PAD + 8, 212, C.gold);
+    T('Everyone earned at x' + run.mult + ' rate.', PAD + 8, 225, 7.2, C.dim, 'left', '400');
   } else if (run.mode === 'lone') {
-    txt('LONE SURVIVOR: ONE SPARED PER ROUND', 12, y0 + 5, 5.4, C.purple, 'left', '700');
-    txt('Points go to the single best answer.', 12, y0 + 16, 5, C.faint, 'left', '400');
+    sectionLabel('LONE SURVIVOR', PAD + 8, 212, C.purple);
+    T('One spared per round. Points to the best answer.', PAD + 8, 225, 7.2, C.dim, 'left', '400');
   } else {
-    txt('NEXT ROUND: ' + Math.min(run.round + 1, run.totalRounds) + ' OF ' + run.totalRounds, 12, y0 + 5, 5.4, C.dim, 'left', '700');
-    txt(run.round >= run.totalRounds ? 'The final judgement is next.' : 'The AI is already writing the next one.', 12, y0 + 16, 5, C.faint, 'left', '400');
+    sectionLabel('NEXT UP', PAD + 8, 212, C.faint);
+    T(run.round >= run.totalRounds ? 'The final judgement is next.' : 'Round ' + (run.round + 1) + ' of ' + run.totalRounds + '. The AI is writing it.', PAD + 8, 225, 7.2, C.dim, 'left', '400');
   }
 
-  txt('SIDE: CONTINUE', W / 2, 245, 7, C.orange, 'center', '700');
-  hint('SIDE: CONTINUE');
+  footerBar('SIDE', 'CONTINUE', null, null);
 }
 
 /* =========================================================================
@@ -2127,62 +2496,45 @@ function drawFinal() {
   const run = S.run;
   const you = run.you;
   const won = run.won;
-
-  ctx.fillStyle = '#0a0c12';
-  ctx.fillRect(0, 0, W, 19);
-  hline(0, W, 19, C.line, 0.9);
-  txt('FINAL JUDGEMENT', 8, 6, 6, C.dim, 'left', '700');
-  txt(modeShort(run.mode), W - 8, 6, 5.4, C.faint, 'right', '700');
-
-  if (won) {
-    ctx.globalAlpha = 0.14 + Math.sin(GT * 2) * 0.05;
-    ctx.fillStyle = C.gold;
-    ctx.beginPath();
-    ctx.arc(W / 2, 52, 44, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-
-  sigil(you.av, W / 2, 36, 13, 1, !won);
-  spaced(won ? 'VICTORY' : 'YOU DIED', W / 2, 58, 20, won ? C.gold : C.red, 1, 'center', '700');
-  txt('PLACE #' + you.place + ' OF ' + run.players.length + '    ' + you.points + ' PTS', W / 2, 84, 6, C.ink, 'center', '700');
-
   const order = run.order || sortedPlayers(run);
-  const winner = order[0];
-  txt(won ? 'THE AI RANKS YOU FIRST. IT IS FURIOUS.' : winner.name + ' TAKES THE CROWN.', W / 2, 96, 5.4, won ? C.gold : C.dim, 'center', '700');
+  playHeader();
+
+  emblem(W / 2, 52, 15, won ? C.gold : C.red);
+  T(won ? 'VICTORY' : 'YOU DIED', W / 2, 70, 22, won ? C.gold : C.red, 'center', '800', 2);
+  T('PLACE #' + you.place + ' OF ' + run.players.length + '   /   ' + you.points + ' PTS', W / 2, 96, 7.6, C.ink, 'center', '700', 0.3, NUM);
+  T(won ? 'THE AI RANKS YOU FIRST. IT IS FURIOUS.' : order[0].name + ' TAKES THE CROWN.', W / 2, 107, 6.8, won ? C.gold : C.dim, 'center', '800', 0.4);
 
   for (let i = 0; i < order.length; i++) {
     const p = order[i];
-    const y = 110 + i * 20;
-    if (p.isYou) panel(6, y - 1, W - 12, 18, 'rgba(255,90,43,0.07)', null, 2);
-    txt('#' + (i + 1), 10, y + 2, 5.4, p.isYou ? C.orange : C.faint, 'left', '700');
-    sigil(p.av, 30, y + 7, 5, 0.9, false);
-    txt(p.name + (p.isYou ? ' (YOU)' : ''), 40, y + 2, 6, p.isYou ? C.ink : C.dim, 'left', '700');
-    txt(p.survives + '/' + run.round, 150, y + 2, 5, C.faint, 'right', '400');
-    txt(String(p.points), W - 10, y + 1, 6.4, p.isYou ? C.gold : C.ink, 'right', '700');
+    const y = 120 + i * 20;
+    if (p.isYou) card(PAD, y - 2, CW, 18, { r: 4, tint: ['rgba(255,106,61,0.09)', 'rgba(255,106,61,0.02)'], stroke: 'rgba(255,106,61,0.25)' });
+    T('#' + (i + 1), PAD + 4, y + 2, 6.8, p.isYou ? C.orange : C.faint, 'left', '700', 0.2, NUM);
+    sigil(p.av, PAD + 24, y + 6, 5.5, 0.9);
+    T(p.name + (p.isYou ? ' (YOU)' : ''), PAD + 35, y + 1.5, 7.6, p.isYou ? C.ink : C.dim, 'left', '700', 0.2);
+    T(p.survives + '/' + run.round, W - PAD - 44, y + 2, 6.6, C.faint, 'right', '400', 0.2, NUM);
+    T(String(p.points), W - PAD - 4, y + 1, 8.2, p.isYou ? C.gold : C.ink, 'right', '700', 0.2, NUM);
   }
 
   const newAch = run.newAch || [];
   if (newAch.length) {
-    txt('NEW TROPHIES', 8, 195, 4.8, C.gold, 'left', '700');
-    for (let i = 0; i < Math.min(2, newAch.length); i++) {
-      txt('X ' + newAch[i], 8, 203 + i * 8, 5.2, C.gold, 'left', '700');
-    }
-    if (newAch.length > 2) txt('and ' + (newAch.length - 2) + ' more', 8, 219, 4.6, C.faint, 'left', '400');
+    T(newAch[0], PAD, 203, 6.8, C.gold, 'left', '800', 0.4);
+    if (newAch.length > 1) T(newAch[1], PAD, 213, 6.8, C.gold, 'left', '800', 0.4);
+    if (newAch.length > 2) T('+' + (newAch.length - 2) + ' MORE', W - PAD, 208, 6.2, C.faint, 'right', '800', 0.4);
   } else {
-    txt('NO NEW TROPHIES. THE AI IS NOT IMPRESSED.', 8, 200, 4.8, C.faint, 'left', '400');
+    T('NO NEW TROPHIES. THE AI IS NOT IMPRESSED.', PAD, 205, 6.6, C.faint, 'left', '400');
   }
 
   const opts = ['RUN IT AGAIN', 'MAIN MENU'];
   for (let i = 0; i < 2; i++) {
-    const y = 226 + i * 15;
+    const y = 226 + i * 17;
     const sel = run.finalIdx === i;
-    if (sel) {
-      panel(6, y - 2, W - 12, 14, 'rgba(255,90,43,0.12)', 'rgba(255,90,43,0.5)', 2);
-    }
-    txt((sel ? '> ' : '  ') + opts[i], 12, y, 6.4, sel ? C.ink : C.dim, 'left', '700');
+    card(PAD, y, CW, 15, { selected: sel, r: 5 });
+    if (sel) { ctx.fillStyle = C.orange; rr(PAD + 1.5, y + 4, 2.5, 7, 1.25); ctx.fill(); }
+    T(opts[i], PAD + 12, y + 3.5, 7.6, sel ? C.ink : C.faint, 'left', '800', 0.4);
+    if (sel) chevron(W - 14, y + 8, 1, C.orange);
   }
-  hint('WHEEL: MOVE    SIDE: SELECT');
+
+  footerBar('WHEEL', 'MOVE', 'SIDE', 'SELECT');
 }
 
 /* =========================================================================
@@ -2192,10 +2544,14 @@ function drawToast() {
   if (!S.toast || S.toastT <= 0) return;
   const a = Math.min(1, S.toastT * 2);
   ctx.globalAlpha = a;
-  const sz = fitText(S.toast, W - 30, 6, '700', 4.6);
-  const w = measure(S.toast, sz, '700') + 16;
-  panel(W / 2 - w / 2, 23, w, 17, 'rgba(10,12,18,0.95)', S.toastColor || C.gold, 3);
-  txt(S.toast, W / 2, 28, sz, S.toastColor || C.gold, 'center', '700');
+  const sz = fit(S.toast, W - 46, 7.4, '800', 6.2);
+  const w = TM(S.toast, sz, '800') + 26;
+  const x = W / 2 - w / 2;
+  card(x, 30, w, 21, { r: 6, tint: ['rgba(12,14,20,0.98)', 'rgba(12,14,20,0.96)'], stroke: (S.toastColor || C.gold) });
+  ctx.fillStyle = S.toastColor || C.gold;
+  rr(x + 1.5, 35, 2.5, 11, 1.25);
+  ctx.fill();
+  T(S.toast, W / 2 + 2, 36.5, sz, S.toastColor || C.gold, 'center', '800', 0.3);
   ctx.globalAlpha = 1;
 }
 
@@ -2235,7 +2591,7 @@ function render() {
   ctx.restore();
 
   if (G.settings.fx && scanPattern) {
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = 0.18;
     ctx.fillStyle = scanPattern;
     ctx.fillRect(0, 0, W, H);
     ctx.globalAlpha = 1;
@@ -2310,7 +2666,7 @@ function doScroll(d) {
     S.eraseArmed = false;
     sfx('move');
   } else if (S.screen === 'stats') {
-    S.statsIdx = (S.statsIdx + d + 2) % 2;
+    S.statsIdx = (S.statsIdx + d + 3) % 3;
     sfx('move');
   } else if (S.screen === 'play' && S.run) {
     const run = S.run;
@@ -2572,6 +2928,12 @@ window.addEventListener('keydown', function (e) {
       e.preventDefault();
       doBack();
     }
+    return;
+  }
+  if (low === 'h' && S.screen === 'play' && S.run && S.run.phase === 'answer') {
+    e.preventDefault();
+    S.run.showHints = !S.run.showHints;
+    sfx('move');
     return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;

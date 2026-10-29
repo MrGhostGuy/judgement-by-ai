@@ -10,9 +10,33 @@ Created by **Jeff H. (Mr. Ghost / GhostLegacyX)**.
 
 ## Play
 
-- **On the R1:** scan the creation code, or open the hosted build.
+- **On the R1:** scan the authentic creation QR below, or open the hosted build.
 - **Live:** https://mrghostguy.github.io/judgement-by-ai/
 - **Desktop:** open `index.html` in a browser. Wheel / arrow keys move, `Enter` or click selects, hold `F` (or hold the mouse) to talk, right-click goes back.
+
+### Rabbit R1 creation code
+
+![Judgement by AI Rabbit R1 creation QR code](docs/qr-codes/judgement-by-ai.png)
+
+The QR payload is the standard Rabbit R1 creation JSON:
+
+```json
+{
+  "title": "Judgement by AI",
+  "url": "https://mrghostguy.github.io/judgement-by-ai/",
+  "description": "Five rounds, one local AI judge, 75 ways to die.",
+  "iconUrl": "",
+  "themeColor": "#FE5000"
+}
+```
+
+To regenerate the QR locally:
+
+```bash
+npm install qrcode
+node scripts/generate-qr-codes.js
+```
+
 
 Runs entirely offline after first load. Progress is stored in `localStorage` under `jba_save_v1`.
 
@@ -55,6 +79,9 @@ If on-device speech recognition is unavailable, the **Phrase Forge** builds an a
 
 - `index.html` - the entire game
 - `icon.png` - 256x256 creation-code icon
+- `docs/creation.json` - exact R1 creation payload encoded in the QR code
+- `docs/qr-codes/judgement-by-ai.png` - scan-to-install R1 QR code
+- `scripts/generate-qr-codes.js` - regenerates the QR code and payload
 
 ## Credits
 
