@@ -14,28 +14,36 @@ Created by **Jeff H. (Mr. Ghost / GhostLegacyX)**.
 - **Live:** https://mrghostguy.github.io/judgement-by-ai/
 - **Desktop:** open `index.html` in a browser. Wheel / arrow keys move, `Enter` or click selects, hold `F` (or hold the mouse) to talk, right-click goes back.
 
-### Rabbit R1 creation code
+### Rabbit R1 authentic creation code
 
-![Judgement by AI Rabbit R1 creation QR code](docs/qr-codes/judgement-by-ai.png)
+![Judgement by AI Rabbit R1 authentic creation code](docs/qr-codes/judgement-by-ai.png)
 
-The QR payload is the standard Rabbit R1 creation JSON:
+This QR was generated with the **Enhanced QR Code Generator** at `C:\Users\kency\Desktop\qr-generator\index_fixed.html`, using the verified R1 creation-code process:
+
+- 310-character ASCII-only JSON payload
+- 440x440 native render, composited 1:1 into the 460x460 square canvas
+- QR error correction level `H`
+- All 5 fields filled, including a reachable HTTPS `iconUrl`
+
+Encoded payload:
 
 ```json
 {
   "title": "Judgement by AI",
   "url": "https://mrghostguy.github.io/judgement-by-ai/",
-  "description": "Five rounds, one local AI judge, 75 ways to die.",
-  "iconUrl": "",
+  "description": "Death by AI style party game: 5 rounds, 75 deadly scenarios, one local AI judge. Speak your escape. By Jeff H. (Mr. Ghost).",
+  "iconUrl": "https://mrghostguy.github.io/judgement-by-ai/icon.png",
   "themeColor": "#FE5000"
 }
 ```
 
-To regenerate the QR locally:
+Verified locally with both independent decoders before publishing:
 
-```bash
-npm install qrcode
-node scripts/generate-qr-codes.js
-```
+- ZXing: decoded, ASCII-safe, `JSON.PARSE: SUCCESS`, all 5 fields filled
+- jsQR: decoded, ASCII-safe, `JSON.PARSE: SUCCESS`, all 5 fields filled
+
+The app URL and icon URL were both checked live and returned HTTP 200.
+
 
 
 Runs entirely offline after first load. Progress is stored in `localStorage` under `jba_save_v1`.
