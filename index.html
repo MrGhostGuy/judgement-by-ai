@@ -68,6 +68,13 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const easeOut = t => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 const easeInOut = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 const pad2 = n => (n < 10 ? '0' : '') + n;
+function reduceMotion() {
+  try {
+    if (G && G.settings && G.settings.reduceMotion) return true;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return true;
+  } catch (e) {}
+  return false;
+}
 
 function mulberry32(a) {
   return function () {
@@ -117,14 +124,24 @@ function buildFX() {
 
 /* ---------------- audio ---------------- */
 let AC = null, masterGain = null;
+let audioMissingWarned = false;
 function initAudio() {
   if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) {
+    if (!audioMissingWarned) { audioMissingWarned = true; toast('AUDIO UNAVAILABLE', C.dim); }
+    AC = null;
+    return;
+  }
   try {
-    AC = new (window.AudioContext || window.webkitAudioContext)();
+    AC = new Ctor();
     masterGain = AC.createGain();
     masterGain.gain.value = G.settings.sound ? 0.9 : 0;
     masterGain.connect(AC.destination);
-  } catch (e) { AC = null; }
+  } catch (e) {
+    AC = null;
+    if (!audioMissingWarned) { audioMissingWarned = true; toast('AUDIO UNAVAILABLE', C.dim); }
+  }
 }
 function tone(freq, dur, vol, type, slideTo, when) {
   if (!AC || !G.settings.sound) return;
@@ -170,7 +187,7 @@ function sfx(type) {
 /* ---------------- persistence ---------------- */
 const SAVE_KEY = 'jba_save_v1';
 const DEFAULT_SAVE = {
-  settings: { sound: true, narrator: true, fx: true, difficulty: 1, bonus: true },
+  settings: { sound: true, narrator: true, fx: true, difficulty: 1, bonus: true, reduceMotion: false },
   stats: { runs: 0, wins: 0, survives: 0, deaths: 0, best: 0, streak: 0, bestStreak: 0, banned: 0, cheese: 0, daily: 0, rounds: 0 },
   ach: {},
   daily: { date: '', best: 0, done: false },
@@ -180,19 +197,28 @@ const DEFAULT_SAVE = {
 let G = JSON.parse(JSON.stringify(DEFAULT_SAVE));
 function loadSave() {
   try {
+    if (!window.localStorage) return;
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return;
     const d = JSON.parse(raw);
+    if (!d || typeof d !== 'object') return;
     G = Object.assign({}, DEFAULT_SAVE, d);
     G.settings = Object.assign({}, DEFAULT_SAVE.settings, d.settings || {});
     G.stats = Object.assign({}, DEFAULT_SAVE.stats, d.stats || {});
     G.daily = Object.assign({}, DEFAULT_SAVE.daily, d.daily || {});
-    G.ach = d.ach || {};
+    G.ach = (d.ach && typeof d.ach === 'object') ? d.ach : {};
     G.history = Array.isArray(d.history) ? d.history.slice(0, 8) : [];
-  } catch (e) {}
+  } catch (e) {
+    try { if (window.localStorage) localStorage.removeItem(SAVE_KEY); } catch (err) {}
+  }
 }
 function save() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) {}
+  try {
+    if (!window.localStorage) return;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(G));
+  } catch (e) {
+    toast('SAVE FAILED', C.red);
+  }
 }
 
 /* =========================================================================
@@ -627,6 +653,7 @@ const Voice = {
     S.run.voiceFinal = '';
     S.run.voiceInterim = '';
     S.run.voiceMode = this.supported() ? 'speech' : 'meter';
+    if (!this.supported()) toast('SPEECH UNAVAILABLE - PHRASE FORGE', C.orange);
     sfx('voiceOn');
 
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -651,7 +678,7 @@ const Voice = {
           };
           tick();
         } catch (e) {}
-      }).catch(() => {});
+      }).catch(() => { if (this.on) toast('MIC ACCESS DENIED', C.red); });
     }
 
     if (this.supported()) {
@@ -672,12 +699,17 @@ const Voice = {
           if (fin) S.run.voiceFinal = (S.run.voiceFinal || '') + fin;
           S.run.voiceInterim = inter;
         };
-        this.rec.onerror = () => {};
+        this.rec.onerror = e => {
+          const code = (e && e.error) || '';
+          if (code === 'not-allowed' || code === 'service-not-allowed') {
+            if (this.on) toast('MIC BLOCKED', C.red);
+          }
+        };
         this.rec.onend = () => {
-          if (this.on && !this.stopping) { try { this.rec.start(); } catch (e) {} }
+          if (this.on && !this.stopping && this.rec) { try { this.rec.start(); } catch (e) {} }
         };
         this.rec.start();
-      } catch (e) { this.rec = null; }
+      } catch (e) { this.rec = null; if (S.run) S.run.voiceMode = 'meter'; toast('SPEECH UNAVAILABLE - PHRASE FORGE', C.orange); }
     }
   },
   stop(cb) {
@@ -696,7 +728,7 @@ const Voice = {
     if (S.run) S.run.listening = false;
     sfx('voiceOff');
     const wait = this.rec ? 420 : 40;
-    setTimeout(() => { if (cb) cb(); }, wait);
+    setTimeout(() => { if (this.rec) { try { this.rec.abort(); } catch (e) {} this.rec = null; } if (cb) cb(); }, wait);
   }
 };
 
@@ -801,6 +833,7 @@ const SETTINGS_ROWS = [
   { k: 'fx',         label: 'CRT EFFECTS', vals: ['OFF', 'ON'] },
   { k: 'difficulty', label: 'DIFFICULTY',  vals: ['FORGIVING', 'STANDARD', 'MERCILESS'] },
   { k: 'bonus',      label: 'BONUS ROUNDS',vals: ['OFF', 'ON'] },
+  { k: 'motion',     label: 'REDUCE MOTION', vals: ['OFF', 'ON'] },
   { k: 'erase',      label: 'ERASE ALL DATA', vals: ['HOLD...', 'ARMED'] }
 ];
 
@@ -808,6 +841,14 @@ function toast(msg, color) {
   S.toast = msg;
   S.toastT = 2.8;
   S.toastColor = color || C.gold;
+}
+function toastSetting(id) {
+  if (id === 'sound') toast('SOUND: ' + (G.settings.sound ? 'ON' : 'OFF'), G.settings.sound ? C.green : C.dim);
+  else if (id === 'narrator') toast('NARRATOR: ' + (G.settings.narrator ? 'ON' : 'OFF'), C.gold);
+  else if (id === 'fx') toast('CRT FX: ' + (G.settings.fx ? 'ON' : 'OFF'), C.orange2 || C.orange);
+  else if (id === 'difficulty') { const rr = SETTINGS_ROWS.find(x => x.k === 'difficulty'); toast('DIFFICULTY: ' + (rr ? rr.vals[G.settings.difficulty] : ''), C.orange); }
+  else if (id === 'bonus') toast('BONUS: ' + (G.settings.bonus ? 'ON' : 'OFF'), C.gold);
+  else if (id === 'motion') toast('REDUCE MOTION: ' + (G.settings.reduceMotion ? 'ON' : 'OFF'), G.settings.reduceMotion ? C.green : C.dim);
 }
 
 function unlock(id) {
@@ -1943,7 +1984,7 @@ function drawSettings() {
   headerBar('SETTINGS', 'AUTO-SAVED', C.orange);
   for (let i = 0; i < SETTINGS_ROWS.length; i++) {
     const row = SETTINGS_ROWS[i];
-    const y = 31 + i * 31;
+    const y = 24 + i * 30;
     const sel = i === S.setIdx;
     const danger = i === SETTINGS_ROWS.length - 1;
     card(PAD, y, CW, 27, { selected: sel && !danger, r: 6, stroke: sel && danger ? 'rgba(255,68,99,0.55)' : null });
@@ -1959,6 +2000,7 @@ function drawSettings() {
     else if (row.k === 'fx') v = G.settings.fx ? 'ON' : 'OFF';
     else if (row.k === 'difficulty') v = row.vals[G.settings.difficulty];
     else if (row.k === 'bonus') v = G.settings.bonus ? 'ON' : 'OFF';
+    else if (row.k === 'motion') v = G.settings.reduceMotion ? 'ON' : 'OFF';
     else if (row.k === 'erase') v = S.eraseArmed ? 'TAP AGAIN' : 'RESET';
     T(v, W - PAD - 10, y + 10, 7.4, sel ? (danger ? C.red : C.orange2) : C.faint, 'right', '800', 0.3);
   }
@@ -1969,11 +2011,12 @@ function drawSettings() {
     'Scanlines and vignette. Very serious.',
     'Raise the pass mark if you enjoy pain.',
     'Round 3 pays x2. Round 5 pays x3.',
+    'Less shake and flash. For comfort.',
     'Clears stats, trophies and daily record.'
   ];
-  card(PAD, 220, CW, 30, { r: 6 });
-  sectionLabel('NOTE', PAD + 8, 224, C.faint);
-  T(notes[S.setIdx], PAD + 8, 236, 7.6, C.ink, 'left', '400');
+  card(PAD, 236, CW, 20, { r: 6 });
+  sectionLabel('NOTE', PAD + 8, 240, C.faint);
+  T(notes[S.setIdx], PAD + 8, 250, 7, C.ink, 'left', '400');
 
   footerBar('WHEEL', 'MOVE', 'SIDE', 'CHANGE');
 }
@@ -2562,7 +2605,7 @@ function render() {
   drawBG();
 
   ctx.save();
-  if (S.shake > 0.15) {
+  if (!reduceMotion() && S.shake > 0.15) {
     ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
   }
 
@@ -2599,7 +2642,7 @@ function render() {
   if (vignette) ctx.drawImage(vignette, 0, 0);
 
   if (S.flashT > 0) {
-    ctx.globalAlpha = Math.min(0.5, S.flashT);
+    ctx.globalAlpha = Math.min(reduceMotion() ? 0.16 : 0.5, S.flashT);
     ctx.fillStyle = S.flashColor || '#ffffff';
     ctx.fillRect(0, 0, W, H);
     ctx.globalAlpha = 1;
@@ -2619,6 +2662,7 @@ let lastVoiceEndAt = 0;
 let lastWheelAt = 0;
 
 function setScreen(s) {
+  if (s !== 'play' && S.screen === 'play' && Voice.on) Voice.stop(() => {});
   S.screen = s;
   S.t = 0;
   S.fade = 1;
@@ -2692,8 +2736,12 @@ function toggleSetting(id) {
   } else if (id === 'bonus') {
     G.settings.bonus = !G.settings.bonus;
     sfx('select');
+  } else if (id === 'motion') {
+    G.settings.reduceMotion = !G.settings.reduceMotion;
+    sfx('select');
   }
   save();
+  toastSetting(id);
 }
 
 function doSide() {
@@ -2898,6 +2946,9 @@ cv.addEventListener('pointercancel', function () {
 
 cv.addEventListener('contextmenu', function (e) { e.preventDefault(); doBack(); });
 
+window.addEventListener('blur', function () { if (Voice.on) doLongEnd(); });
+document.addEventListener('visibilitychange', function () { if (document.hidden && Voice.on) doLongEnd(); });
+
 window.addEventListener('keydown', function (e) {
   const k = e.key || '';
   const low = k.toLowerCase();
@@ -2957,6 +3008,8 @@ window.addEventListener('keyup', function (e) {
 document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', function () { setTimeout(resize, 120); });
+window.addEventListener('pagehide', save);
+document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') save(); });
 
 /* =========================================================================
    UPDATE LOOP
@@ -3007,9 +3060,9 @@ function update(dt) {
           S.flashT = 0.2; S.flashColor = C.green;
         } else {
           sfx('death');
-          S.shake = 8;
+          S.shake = reduceMotion() ? 0 : 8;
           S.flashT = 0.55; S.flashColor = C.red;
-          try { if (navigator.vibrate) navigator.vibrate(60); } catch (err) {}
+          try { if (!reduceMotion() && navigator.vibrate) navigator.vibrate(60); } catch (err) {}
         }
       }
     }
