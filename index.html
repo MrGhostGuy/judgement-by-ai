@@ -613,6 +613,36 @@ function judgeAnswer(text, sc, player, rng) {
 }
 
 /* =========================================================================
+   SPOKEN-DELIVERY JUDGE - for devices with no speech-to-text (the R1).
+   The words never arrive, so the AI scores the plea itself: how long he
+   spoke, how strongly, and whether it sounded like sentences or one panic.
+   ========================================================================= */
+function judgeSpoken(d, rng) {
+  const threshold = THRESH[G.settings.difficulty] || 50;
+  const tags = ['SPOKEN'];
+  let score = 14;
+  if (d.dur < 1.5) { score += 6; tags.push('THIN'); }
+  else if (d.dur < 3) score += 18;
+  else if (d.dur <= 9) score += 34;
+  else if (d.dur <= 14) score += 26;
+  else { score += 16; tags.push('OVERLONG'); }
+  score += Math.round(clamp(d.energy / 0.35, 0, 1) * 20);
+  if (d.energy >= 0.3) tags.push('STRONG DELIVERY');
+  if (d.bursts <= 1) score += 5;
+  else if (d.bursts <= 6) score += 16;
+  else score += 10;
+  if (d.peak >= 0.55) score += 8;
+  score += (rng() * 10 - 5);
+  score = Math.round(clamp(score, 1, 100));
+  const pass = score >= threshold;
+  return {
+    score: score, pass: pass, banned: null, cheese: false,
+    quip: pass ? pickR(JUDGE_QUIPS_PASS, rng) : pickR(JUDGE_QUIPS_FAIL, rng),
+    tags: tags.slice(0, 2)
+  };
+}
+
+/* =========================================================================
    RIVAL BRAIN
    ========================================================================= */
 function makeRivalAnswer(sc, skill, rng) {
@@ -644,16 +674,21 @@ function makeRivalAnswer(sc, skill, rng) {
 const Voice = {
   rec: null, stream: null, analyser: null, data: null, raf: null,
   on: false, level: 0, t0: 0, stopping: false,
+  dur: 0, peak: 0, energySum: 0, energyN: 0, bursts: 0, above: false,
+  lastBurstAt: 0, lastTickAt: 0, lastDelivery: null,
   supported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); },
   start() {
     if (this.on || !S.run || S.run.phase !== 'answer') return;
     initAudio();
     this.on = true; this.stopping = false; this.level = 0; this.t0 = performance.now();
+    this.dur = 0; this.peak = 0; this.energySum = 0; this.energyN = 0;
+    this.bursts = 0; this.above = false; this.lastBurstAt = 0;
+    this.lastTickAt = performance.now(); this.lastDelivery = null;
     S.run.listening = true;
     S.run.voiceFinal = '';
     S.run.voiceInterim = '';
     S.run.voiceMode = this.supported() ? 'speech' : 'meter';
-    if (!this.supported()) toast('SPEECH UNAVAILABLE - PHRASE FORGE', C.orange);
+    if (!this.supported()) toast('NO SPEECH-TO-TEXT - DELIVERY COUNTS', C.orange);
     sfx('voiceOn');
 
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -674,6 +709,15 @@ const Voice = {
             let sum = 0;
             for (let i = 0; i < this.data.length; i++) sum += this.data[i];
             this.level = Math.min(1, (sum / this.data.length) / 85);
+            const nowT = performance.now();
+            this.dur += Math.min(0.1, Math.max(0, (nowT - this.lastTickAt) / 1000));
+            this.lastTickAt = nowT;
+            if (this.level > this.peak) this.peak = this.level;
+            this.energySum += this.level; this.energyN++;
+            if (this.level > 0.16 && !this.above) {
+              this.above = true;
+              if (nowT - this.lastBurstAt > 240) { this.bursts++; this.lastBurstAt = nowT; }
+            } else if (this.level < 0.07) this.above = false;
             this.raf = requestAnimationFrame(tick);
           };
           tick();
@@ -709,12 +753,19 @@ const Voice = {
           if (this.on && !this.stopping && this.rec) { try { this.rec.start(); } catch (e) {} }
         };
         this.rec.start();
-      } catch (e) { this.rec = null; if (S.run) S.run.voiceMode = 'meter'; toast('SPEECH UNAVAILABLE - PHRASE FORGE', C.orange); }
+      } catch (e) { this.rec = null; if (S.run) S.run.voiceMode = 'meter'; toast('NO SPEECH-TO-TEXT - DELIVERY COUNTS', C.orange); }
     }
   },
   stop(cb) {
     if (!this.on) { if (cb) cb(); return; }
     this.on = false; this.stopping = true; this.level = 0;
+    lastVoiceEndAt = performance.now();
+    this.lastDelivery = {
+      dur: this.dur, peak: this.peak,
+      energy: this.energyN ? this.energySum / this.energyN : 0,
+      bursts: this.bursts,
+      spoke: this.dur >= 0.35 && this.peak >= 0.2
+    };
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
     if (this.rec) {
       try { this.rec.stop(); } catch (e) {}
@@ -884,6 +935,7 @@ function packPool(id) {
 }
 
 function startRun(mode, packId) {
+  Narrate.stop();
   const isDaily = mode === 'daily';
   let seed;
   if (isDaily) {
@@ -936,7 +988,7 @@ function startRun(mode, packId) {
     round: 0, totalRounds: 5,
     players: roster, you: you, used: [],
     phase: 'intro', t: 0, answer: '', timeLeft: 60,
-    listening: false, voiceFinal: '', voiceInterim: '', voiceMode: '',
+    listening: false, voiceFinal: '', voiceInterim: '', voiceMode: '', spoken: null,
     verdicts: [], vi: 0, judgeT: 0,
     seed: seed, rng: rng, deck: [],
     bonus: false, mult: 1,
@@ -1002,6 +1054,7 @@ function nextRound() {
   run.vi = 0;
   run.forge = null;
   run.usedForge = false;
+  run.spoken = null;
   run.roundPoints = 0;
   run.mult = (G.settings.bonus && (run.round === 3 || run.round === 5)) ? (run.round === 3 ? 2 : 3) : 1;
   run.bonus = run.mult > 1;
@@ -1025,6 +1078,7 @@ function beginAnswer() {
   run.answer = '';
   run.voiceFinal = '';
   run.voiceInterim = '';
+  run.spoken = null;
   run.lastTick = 60;
   sfx('select');
 }
@@ -1058,7 +1112,7 @@ function resolveRound() {
     if (!p.isYou) p.answer = makeRivalAnswer(sc, p.skill, rng);
     const text = p.isYou ? run.answer : p.answer;
     p.answer = text;
-    const res = judgeAnswer(text, sc, p, rng);
+    const res = (p.isYou && run.spoken) ? judgeSpoken(run.spoken, rng) : judgeAnswer(text, sc, p, rng);
     p.score = res.score;
     p.pass = res.pass;
     p.banned = res.banned;
@@ -1165,6 +1219,64 @@ function continueFromStandings() {
   else nextRound();
 }
 
+/* =========================================================================
+   AI NARRATOR (VOICE) - reads the final results aloud via speech synthesis.
+   The narrator setting gates it. Everything is guarded: devices without a
+   speech engine simply stay silent and the text results still show.
+   ========================================================================= */
+const Narrate = {
+  ok() {
+    return !!(window.speechSynthesis && window.SpeechSynthesisUtterance && G.settings.narrator);
+  },
+  say(text) {
+    if (!this.ok() || !text) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new window.SpeechSynthesisUtterance(text);
+      u.rate = 1.03;
+      u.pitch = 0.82;
+      window.speechSynthesis.speak(u);
+      try { window.speechSynthesis.resume(); } catch (e) {}
+    } catch (e) {}
+  },
+  stop() {
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+  }
+};
+
+function ordinal(n) {
+  if (n === 1) return 'First';
+  if (n === 2) return 'Second';
+  if (n === 3) return 'Third';
+  if (n === 4) return 'Fourth';
+  return n + 'th';
+}
+
+function finalResultsScript(run) {
+  const order = run.order || sortedPlayers(run);
+  const you = run.you;
+  const parts = [];
+  parts.push('Judgement complete.');
+  if (run.won) {
+    parts.push('Victory! You take first place, with ' + you.points + ' points.');
+  } else {
+    parts.push(order[0].name + ' takes the crown. You finished ' +
+      ordinal(you.place).toLowerCase() + ' of ' + run.players.length +
+      ', with ' + you.points + ' points.');
+  }
+  parts.push('You survived ' + you.survives + ' of ' + run.round + ' rounds.');
+  const lines = [];
+  for (let i = 0; i < order.length; i++) {
+    const p = order[i];
+    lines.push(ordinal(i + 1) + ', ' + (p.isYou ? 'you' : p.name) + ', ' + p.points + ' points');
+  }
+  parts.push('Final standings: ' + lines.join('. ') + '.');
+  if (run.newAch && run.newAch.length) {
+    parts.push('New trophies unlocked: ' + run.newAch.join(', ') + '.');
+  }
+  return parts.join(' ');
+}
+
 function finishRun() {
   const run = S.run;
   if (!run) return;
@@ -1210,6 +1322,7 @@ function finishRun() {
 
   save();
   if (won) sfx('win'); else sfx('death');
+  Narrate.say(finalResultsScript(run));
 }
 
 function replayRun() {
@@ -2007,7 +2120,7 @@ function drawSettings() {
 
   const notes = [
     'All sound is generated on the device.',
-    'Adds a narrator line between rounds.',
+    'Narrator flavor text, and the final results read aloud.',
     'Scanlines and vignette. Very serious.',
     'Raise the pass mark if you enjoy pain.',
     'Round 3 pays x2. Round 5 pays x3.',
@@ -2660,8 +2773,11 @@ function render() {
    ========================================================================= */
 let lastVoiceEndAt = 0;
 let lastWheelAt = 0;
+let lastLongEndAt = 0;
+let longPressHeld = false;
 
 function setScreen(s) {
+  if (s !== S.screen) Narrate.stop();
   if (s !== 'play' && S.screen === 'play' && Voice.on) Voice.stop(() => {});
   S.screen = s;
   S.t = 0;
@@ -2676,6 +2792,18 @@ function afterVoiceStop() {
   const comp = answerComposed(run);
   if (comp) {
     run.answer = comp;
+    run.voiceFinal = '';
+    run.voiceInterim = '';
+    run.phase = 'confirm';
+    run.t = 0;
+    run.usedForge = false;
+    sfx('select');
+  } else if (run.voiceMode === 'meter' && Voice.lastDelivery && Voice.lastDelivery.spoke) {
+    // No speech-to-text on this device, but he really spoke: save the attempt
+    // as a spoken answer and let the judge score the delivery. Never the forge.
+    const d = Voice.lastDelivery;
+    run.spoken = { dur: d.dur, peak: d.peak, energy: d.energy, bursts: d.bursts };
+    run.answer = '[Spoken answer - ' + d.dur.toFixed(1) + ' seconds, judged on delivery.]';
     run.voiceFinal = '';
     run.voiceInterim = '';
     run.phase = 'confirm';
@@ -2747,7 +2875,14 @@ function toggleSetting(id) {
 function doSide() {
   initAudio();
   S.lastInput = GT;
-  if (performance.now() - lastVoiceEndAt < 650) return;
+  // A tap is only a tap if it is not the tail of a hold. The R1 fires
+  // sideClick when the button comes up after a long press, and Voice.stop
+  // resolves ~420ms later - without these guards that stray click lands in
+  // the answer phase and opens the Phrase Forge over a spoken answer.
+  const nowIn = performance.now();
+  if (longPressHeld) return;
+  if (nowIn - lastLongEndAt < 900) return;
+  if (nowIn - lastVoiceEndAt < 650) return;
 
   if (S.screen === 'title') { setScreen('menu'); sfx('select'); return; }
   if (S.screen === 'menu') { menuSelect(); return; }
@@ -2832,6 +2967,7 @@ function doSide() {
 function doLongStart() {
   initAudio();
   S.lastInput = GT;
+  longPressHeld = true;
   if (S.screen === 'title') { setScreen('menu'); sfx('select'); return; }
   if (S.screen !== 'play' || !S.run) return;
   const run = S.run;
@@ -2842,6 +2978,7 @@ function doLongStart() {
     run.voiceFinal = '';
     run.voiceInterim = '';
     run.usedForge = false;
+    run.spoken = null;
     run.phase = 'answer';
     run.t = 0;
     Voice.start();
@@ -2852,6 +2989,7 @@ function doLongStart() {
     run.answer = '';
     run.voiceFinal = '';
     run.voiceInterim = '';
+    run.spoken = null;
     run.forge = null;
     run.t = 0;
     Voice.start();
@@ -2861,6 +2999,9 @@ function doLongStart() {
 }
 
 function doLongEnd() {
+  longPressHeld = false;
+  lastLongEndAt = performance.now();
+  lastVoiceEndAt = performance.now();
   if (Voice.on) Voice.stop(afterVoiceStop);
 }
 
